@@ -1,0 +1,390 @@
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: build-task
+spec:
+  inputs:
+    resources:
+      - name: git-source
+        type: git
+    params:
+      - name: pathToDockerFile
+        default: /workspace/extracted/Dockerfile
+      - name: pathToContext
+        default: /workspace/extracted
+      - name: imageTag
+        default: latest
+  outputs:
+    resources:
+      - name: docker-image
+        type: image
+  steps:
+    - name: echo
+      image: alpine
+      command: [ '/bin/sh' ]
+      args:
+        - '-c'
+        - |
+          echo "/kaniko/executor"
+          echo "--verbosity=debug"
+          echo "--dockerfile=${inputs.params.pathToDockerFile}"
+          echo "--destination=${outputs.resources.docker-image.url}"
+          echo "--context=${inputs.params.pathToContext}"
+          echo "--skip-tls-verify"
+    - name: build-push-step
+      env:
+      - name: DOCKER_CONFIG
+        value: /builder/home/.docker
+      image: gcr.io/kaniko-project/executor:debug
+      command:
+        - /kaniko/executor
+      args:
+        - --verbosity=debug
+        - --dockerfile=${inputs.params.pathToDockerFile}
+        - --destination=${outputs.resources.docker-image.url}
+        - --context=${inputs.params.pathToContext}
+        - --skip-tls-verify
+  volumes:
+    - name: docker-socket
+      hostPath:
+        path: /var/run/docker.sock
+        type: Socket
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: create-experiment-task
+spec:
+  inputs:
+    resources:
+      - name: git-source
+        type: git
+      - name: docker-image
+        type: image
+    params:
+      - name: image-tag
+        default: latest
+      - name: experiment
+        description: template for experiment
+        default: iter8/experiment.yaml
+      - name: experiment-id
+        description: guid for experiment
+        default: latest
+      - name: target-namespace
+        description: namespace to which candidate will be deployed
+        default: default
+      - name: kustomize-dir
+        default: kustomize
+      - name: patch-file
+        default: patch.yaml
+  steps:
+    - name: identify-stable
+      image: kalantar/yq-kubernetes
+      command: [ "/bin/bash" ]
+      args:
+        - '-c'
+        - |
+          IMAGE_TAG=${inputs.params.image-tag}
+          KUSTOMIZE_DIR=/workspace/git-source/${inputs.params.kustomize-dir}
+          PATCH_FILE=${KUSTOMIZE_DIR}/${inputs.params.patch-file}
+          PIPELINE_IMAGE_URL=${inputs.resources.docker-image.url}
+          echo "PATCH_FILE=$PATCH_FILE"
+          echo "PIPELINE_IMAGE_URL=$PIPELINE_IMAGE_URL"
+
+          # Identify the candidate deployment version by generating deployment yaml
+          sed -i -e "s#iter8/reviews:istio-VERSION#${PIPELINE_IMAGE_URL}#" ${PATCH_FILE}
+          sed -i -e "s#VERSION#${IMAGE_TAG}#g" ${PATCH_FILE}
+          cat ${PATCH_FILE} 
+          kustomize build $KUSTOMIZE_DIR
+          CANDIDATE_DEPLOYMENT_NAME=$(kustomize build $KUSTOMIZE_DIR | yq r - metadata.name)
+
+          # Identify the baseline deployment by inspecting the target namespace
+          CLUSTER_NAMESPACE=${inputs.params.target-namespace}
+          EXPERIMENT_TEMPLATE_FILE=/workspace/git-source/${inputs.params.experiment}
+          source <(curl -sSL "https://raw.githubusercontent.com/iter8-tools/iter8-toolchain-rollout/master/scripts/identify_stable.sh")
+          if [[ -z $BASELINE_DEPLOYMENT_NAME ]]; then BASELINE_DEPLOYMENT_NAME=$CANDIDATE_DEPLOYMENT_NAME; fi
+
+          # Create a version specific experiment name
+          EXPERIMENT_ID=${inputs.params.image-tag}
+          EXPERIMENT_NAME=$(yq read ${EXPERIMENT_TEMPLATE_FILE} metadata.name)-${EXPERIMENT_ID}
+
+          echo "EXPERIMENT_NAME=$EXPERIMENT_NAME"
+          echo "CANDIDATE_DEPLOYMENT_NAME=${CANDIDATE_DEPLOYMENT_NAME}"
+          echo "BASELINE_DEPLOYMENT_NAME=${BASELINE_DEPLOYMENT_NAME}"
+
+          # Create the experiment resource
+          ON_SUCCESS=candidate
+          source <(curl -sSL "https://raw.githubusercontent.com/iter8-tools/iter8-toolchain-rollout/master/scripts/create_experiment.sh")
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: deploy-task
+spec:
+  inputs:
+    resources:
+      - name: git-source
+        type: git
+      - name: docker-image
+        type: image
+    params:
+      - name: image-tag
+        description: tag of image to deploy
+        default: latest
+      - name: target-namespace
+        description: target namespace for deployment
+        default: default
+      - name: PATCH_FILE
+        default: /workspace/git-source/kustomize/patch.yaml
+      - name: DEPLOYMENT_FILE
+        default: /workspace/deploy.yaml
+  steps:
+    - name: modify-patch
+      image: alpine
+      command: [ "/bin/sh" ]
+      args:
+        - '-c'
+        - |
+          IMAGE_TAG=${inputs.params.image-tag}
+          PATCH_FILE=${inputs.params.PATCH_FILE}
+          #PIPELINE_IMAGE_URL=${inputs.resources.docker-image.url}:${inputs.params.image-tag}
+          PIPELINE_IMAGE_URL=${inputs.resources.docker-image.url}
+
+          sed -i -e "s#iter8/reviews:istio-VERSION#${PIPELINE_IMAGE_URL}#" ${PATCH_FILE}
+          sed -i -e "s#VERSION#${IMAGE_TAG}#g" ${PATCH_FILE}
+          cat ${PATCH_FILE}
+    - name: generate-deployment
+      image: tommeulensteen/kustomize
+      command: [ "kustomize" ]
+      args: [ "build", "/workspace/git-source/kustomize", "-o", "${inputs.params.DEPLOYMENT_FILE}" ]
+    - name: log-deployment
+      image: alpine
+      command: [ "cat" ]
+      args: [ "${inputs.params.DEPLOYMENT_FILE}" ]
+    - name: kubectl-apply
+      image: lachlanevenson/k8s-kubectl
+      command: [ "kubectl" ]
+      args: [ "-n", "${inputs.params.target-namespace}", "apply", "-f", "${inputs.params.DEPLOYMENT_FILE}" ]
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: generate-load-task
+spec:
+  inputs:
+    resources:
+      - name: git-source
+        type: git
+    params:
+      - name: image-tag
+        default: latest
+      - name: target-namespace
+        default: default
+      - name: pipeline-properties
+        default: iter8/pipeline.prop
+  steps:
+    - name: generate-load
+      image: kalantar/yq-kubernetes
+      command: [ "/bin/bash" ]
+      args:
+        - '-c'
+        - |
+          EXPERIMENT_ID=${inputs.params.image-tag}
+          CLUSTER_NAMESPACE=${inputs.params.target-namespace}
+          PROPERTY_FILE=/workspace/git-source/${inputs.params.pipeline-properties}
+
+          # Identify application URL
+          HOST=$(grep app-host ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//')
+          HOST=$(echo $HOST | sed "s#NAMESPACE#$CLUSTER_NAMESPACE#")
+          LOADBALANCER=$(kubectl --namespace istio-system get service istio-ingressgateway --output jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          PORT=$(grep app-port ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//') 
+          PORT=$(kubectl --namespace istio-system get service istio-ingressgateway --output jsonpath="{.spec.ports[?(@.targetPort==$PORT)].nodePort}")
+          URL_PATH=$(grep app-path ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//')
+          URL="http://$LOADBALANCER:$PORT/$URL_PATH"
+          echo "Application URL = $URL"
+
+          # Generate requests until wait-complete-task writes to $STATUS_FILE or timeout
+          DURATION=$(grep load-duration ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//')
+          FREQUENCY=$(grep load-frequency ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//')
+          STATUS_FILE="/status/done-${EXPERIMENT_ID}"
+          COUNT=0
+          startS=$(date +%s)
+          timePassedS=$(( $(date +%s) - $startS ))
+          while [ $timePassedS -lt $DURATION ]; do
+            if [ -f ${STATUS_FILE} ]; then break; fi
+            sleep ${FREQUENCY}
+            curl -H "Host: $HOST" -o /dev/null -s -w "%{http_code}\n" $URL
+            COUNT=$(( $COUNT + 1 ))
+            timePassedS=$(( $(date +%s) - $startS ))
+          done
+          echo "Sent ${COUNT} queries over ${timePassedS}s"
+          rm ${STATUS_FILE} || true # ignore case when no such file
+      volumeMounts:
+        - name: status
+          mountPath: /status
+  volumes:
+    - name: status
+      persistentVolumeClaim:
+        claimName: experiment-stop-claim
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: wait-completion-task
+spec:
+  inputs:
+    resources:
+      - name: git-source
+        type: git
+    params:
+      - name: experiment-template
+        description: yaml template for experiment
+        default: template.yaml
+      - name: experiment-id
+        description: unique identifier for experiment such as a build number
+        default: id
+      - name: target-namespace
+        description: namespace in which experiment is running
+        default: default
+  steps:
+    - name: wait
+      image: kalantar/yq-kubectl
+      command: [ '/bin/bash' ]
+      args:
+        - '-c'
+        - |
+          # DURATION
+          # SLEEP_TIME
+          EXPERIMENT_TEMPLATE_FILE=/workspace/git-source/${inputs.params.experiment-template}
+          EXPERIMENT_ID=${inputs.params.experiment-id}
+          EXPERIMENT_NAME=$(yq read ${EXPERIMENT_TEMPLATE_FILE} metadata.name)-${EXPERIMENT_ID}
+
+          CLUSTER_NAMESPACE=${inputs.params.target-namespace}
+          FORCE_TERMINATION=
+          IDS_STAGE_NAME="wait-experiment-completion"
+          STATUS_FILE="/status/done-${EXPERIMENT_ID}"
+          source <(curl -sSL "https://raw.githubusercontent.com/iter8-tools/iter8-toolchain-rollout/master/scripts/wait_complete_new.sh")
+      volumeMounts:
+        - name: status
+          mountPath: /status
+  volumes:
+    - name: status
+      persistentVolumeClaim:
+        claimName: experiment-stop-claim
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Pipeline
+metadata:
+  name: build-canary-deploy-pipeline
+spec:
+  resources:
+    - name: git-source
+      type: git
+    - name: docker-image
+      type: image
+  params:
+    - name: image-tag
+      default: latest
+    - name: image-name
+      default: index.docker.io/myservice
+    - name: release-name
+      default: myservice
+    - name: repository-name
+      default: myservice
+    - name: target-namespace
+      default: default
+    - name: docker-registry
+      default: index.docker.io
+
+    - name: pathToDockerFile
+      default: /workspace/git-source/Dockerfile
+    - name: pathToContext
+      default: /workspace/git-source
+    - name: experiment
+      default: "iter8/experiment.yaml"
+    - name: experiment-id
+      default: guid
+    - name: stable
+      default: stable
+    - name: candidate
+      default: candidate
+  tasks:
+    - name: build
+      taskRef:
+        name: build-task
+      resources:
+        inputs:
+          - name: git-source
+            resource: git-source
+        outputs:
+          - name: docker-image
+            resource: docker-image
+      params:
+        - name: pathToDockerFile
+          value: ${params.pathToDockerFile}
+        - name: pathToContext
+          value: ${params.pathToContext}
+        - name: imageTag
+          value: ${params.image-tag}
+    - name: generate-load
+      taskRef:
+        name: generate-load-task
+      runAfter: ["build"]
+      resources:
+        inputs:
+          - name: git-source
+            resource: git-source
+      params:
+        - name: image-tag
+          value: "${params.image-tag}"
+        - name: target-namespace
+          value: "${params.target-namespace}"
+    - name: create-experiment
+      taskRef:
+        name: create-experiment-task
+      runAfter: ["build"]
+      resources:
+        inputs:
+          - name: git-source
+            resource: git-source
+          - name: docker-image
+            resource: docker-image
+      params:
+        - name: image-tag
+          value: "${params.image-tag}"
+        - name: experiment
+          value: "${params.experiment}"
+        - name: experiment-id
+          value: "${params.image-tag}"
+        - name: target-namespace
+          value: "${params.target-namespace}"
+    - name: deploy
+      taskRef:
+        name: deploy-task
+      runAfter: ["create-experiment"]
+      resources:
+        inputs:
+          - name: git-source
+            resource: git-source
+          - name: docker-image
+            resource: docker-image
+      params:
+        - name: image-tag
+          value: "${params.image-tag}"
+        - name: target-namespace
+          value: "${params.target-namespace}"
+    - name: wait-completion
+      taskRef:
+        name: wait-completion-task
+      runAfter: [ "create-experiment" ]
+      resources:
+        inputs:
+          - name: git-source
+            resource: git-source
+      params:
+        - name: experiment-template
+          value: "${params.experiment}"
+        - name: experiment-id
+          value: "${params.image-tag}"
+        - name: target-namespace
+          value: "${params.target-namespace}"

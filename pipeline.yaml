@@ -1,0 +1,336 @@
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: deploy
+spec:
+  inputs:
+    resources:
+      - name: source-git
+        type: git
+    params:
+      - name: image-tag
+        description: tag of image to deploy
+        default: v1
+      - name: target-namespace
+        description: target namespace for deployment
+        default: default
+  steps:
+    - name: modify-patch
+      image: alpine
+      command: [ "/bin/sh" ]
+      args:
+        - '-c'
+        - |
+          sed -i -e "s#VERSION#${inputs.params.image-tag}#g" /workspace/source-git/kustomize/patch.yaml
+          cat /workspace/source-git/kustomize/patch.yaml
+    - name: kustomize
+      image: tommeulensteen/kustomize
+      command: [ "kustomize" ]
+      args: 
+        - "build"
+        - "/workspace/source-git/kustomize"
+        - "-o"
+        - "/workspace/deploy.yaml"
+    - name: log-deployment
+      image: alpine
+      command: [ "cat" ]
+      args:
+        - "/workspace/deploy.yaml"
+    - name: apply
+      image: lachlanevenson/k8s-kubectl
+      command: [ "kubectl" ]
+      args:
+        - "--namespace"
+        - "${inputs.params.target-namespace}"
+        - "apply"
+        - "--filename"
+        - "/workspace/deploy.yaml"
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: generate-load
+spec:
+  inputs:
+    resources:
+      - name: source-git
+        type: git
+    params:
+      - name: experiment-id
+        description: identifier for experiment being run
+        default: v1
+      - name: url
+        description: url to query
+        default: 'http://example.com'
+      - name: frequency
+        description: frequency to query per second; may be fractional
+        default: '0.1'
+      - name: duration
+        description: length load is generated
+        default: '10'
+  steps:
+    - name: generate-load
+      image: tutum/curl
+      command: [ "/bin/sh" ]
+      args:
+        - '-c'
+        - |
+          echo "      URL = $URL"
+          echo " DURATION = $DURATION"
+          echo "FREQUENCY = $FREQUENCY"
+          STATUS_FILE="/status/done-${EXPERIMENT_ID}"
+          COUNT=0
+          startS=$(date +%s)
+          timePassedS=$(( $(date +%s) - $startS ))
+          while [ $timePassedS -lt $DURATION ]; do
+            if [ -f ${STATUS_FILE} ]; then break; fi
+            sleep ${FREQUENCY}
+            curl -Is $URL | grep HTTP #> /dev/null
+            COUNT=$(( $COUNT + 1 ))
+            timePassedS=$(( $(date +%s) - $startS ))
+          done
+          echo "Sent ${COUNT} queries over ${timePassedS}s"
+          rm ${STATUS_FILE}
+      env:
+        - name: EXPERIMENT_ID
+          value: ${inputs.params.experiment-id}
+        - name: FREQUENCY
+          value: ${inputs.params.frequency}
+        - name: DURATION
+          value: ${inputs.params.duration}
+        - name: URL
+          value: ${inputs.params.url}
+      volumeMounts:
+        - name: status
+          mountPath: /status
+  volumes:
+    - name: status
+      persistentVolumeClaim:
+        claimName: experiment-stop-claim
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: wait-experiment-completion
+spec:
+  inputs:
+    resources:
+      - name: source-git
+        type: git
+    params:
+      - name: experiment-template
+        description: yaml template for experiment
+        default: template.yaml
+      - name: experiment-id
+        description: unique identifier for experiment such as a build number
+        default: id
+      - name: target-namespace
+        description: namespace in which experiment is running
+        default: default
+      - name: frequency
+        description: interval (in seconds) between queries for status
+        default: "10"
+      - name: duration
+        description: length of experiment in seconds
+        default: "300"
+  steps:
+    - name: wait
+      image: kalantar/yq-kubectl
+      command: [ '/bin/bash' ]
+      args:
+        - '-c'
+        - |
+          echo "      EXPERIMENT_ID = $EXPERIMENT_ID"
+          echo "EXPERIMENT_TEMPLATE = $EXPERIMENT_TEMPLATE"
+          echo "          NAMESPACE = $NAMESPACE"
+          echo "           DURATION = $DURATION"
+          echo "          FREQUENCY = $FREQUENCY"
+
+          SERVICE=$(yq r /workspace/source-git/${EXPERIMENT_TEMPLATE} metadata.name)
+          PIPELINERUN="${SERVICE}-master-${EXPERIMENT_ID}"
+          EXPERIMENT="${SERVICE}-${EXPERIMENT_ID}"
+          STATUS_FILE="/status/done-${EXPERIMENT_ID}"
+
+          echo "            SERVICE = $SERVICE"
+          echo "        PIPELINERUN = $PIPELINERUN"
+          echo "         EXPERIMENT = $EXPERIMENT"
+          echo "        STATUS_FILE = $STATUS_FILE"
+
+          ls -l $(dirname ${STATUS_FILE})
+
+          get_generateload_status() {
+            kubectl get pipelinerun ${PIPELINERUN} -o json \
+            | jq '.status.taskRuns' \
+            | jq -r '.[] | select(.pipelineTaskName=="generate-load").status.conditions | .[].status'
+          }
+
+          get_experiment_status() {
+            kubectl --namespace ${NAMESPACE} \
+              get experiment ${EXPERIMENT} \
+              -o jsonpath='{.status.conditions[?(@.type=="ExperimentCompleted")].status}'
+          }
+
+          # If we have already completed; just exit
+          eStatus=$(get_experiment_status)
+          status=${eStatus:-"False"} # experiment might not have started
+          if [[ "${status}" == "True" ]]; then
+            # experiment is done; make sure load generation is terminated and exit
+            generate_load_status=$(get_generateload_status)
+            if [ "${generate_load_status}" == "Unknown" ]; then
+              touch ${STATUS_FILE}
+            fi
+            exit 0
+          fi
+
+          # Determine when the pipeline was started
+          start=$(kubectl get pipelinerun ${PIPELINERUN} -o jsonpath='{.status.startTime}' | sed 's/T/ /' | sed 's/Z$//')
+          startS=$(TZ=/usr/share/UTC date -d "$start" +%s)
+          #mac startS=$(TZ=/usr/share/UTC date -j -f "%F %T" "$start" +%s)
+          echo "startS=$startS"
+
+          timePassedS=$(( $(date +%s) - $startS ))
+          while (( timePassedS < ${DURATION} )); do
+            echo "timePassedS=$timePassedS"
+            echo "sleepting for $FREQUENCY seconds"
+            sleep ${FREQUENCY}
+
+            eStatus=$(get_experiment_status)
+            status=${eStatus:-"False"} # experiment might not have started
+            echo "status=$status"
+            if [[ "${status}" == "True" ]]; then
+              # experiment is done; make sure load generation is terminated and exit
+              generate_load_status=$(get_generateload_status)
+              if [[ "${generate_load_status}" == "Unknown" ]]; then
+                touch ${STATUS_FILE}
+              fi
+              exit 0
+            fi
+
+              timePassedS=$(( $(date +%s) - $startS ))
+          done
+
+          # We've waited ${DURATION} for the experiment to complete
+          # It hasn't, so we kill the experiment and the load-generation
+          echo kubectl --namespace ${NAMESPACE} delete experiment ${EXPERIMENT} --ignore-not-found
+          touch ${STATUS_FILE}
+          exit 1
+      env:
+        - name: EXPERIMENT_ID
+          value: ${inputs.params.experiment-id}      
+        - name: EXPERIMENT_TEMPLATE
+          value: ${inputs.params.experiment-template}      
+        - name: NAMESPACE
+          value: ${inputs.params.target-namespace}      
+        - name: FREQUENCY
+          value: ${inputs.params.frequency}
+        - name: DURATION
+          value: ${inputs.params.duration}
+      volumeMounts:
+        - name: status
+          mountPath: /status
+  volumes:
+    - name: status
+      persistentVolumeClaim:
+        claimName: experiment-stop-claim
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Pipeline
+metadata:
+  name: build-test-new-version
+spec:
+  resources:
+    - name: git-source
+      type: git
+#    - name: docker-image
+#      type: image
+  params:
+    - name: image-tag
+      default: default
+    - name: target-namespace
+      default: default
+    - name: load-url
+      default: 'http://example.com'
+    - name: load-frequency
+      default: '2'
+    - name: load-duration
+      default: "10"
+    - name: stable
+      default: stable
+    - name: candidate
+      default: candidate
+    - name: experiment-template
+      default: template.yaml
+    - name: experiment-id
+      default: guid
+    - name: test-frequency
+      default: "10"
+    - name: test-duration
+      default: "300"
+  tasks:
+    - name: deploy
+      taskRef:
+        name: deploy
+      resources:
+        inputs:
+          - name: source-git
+            resource: git-source
+      params:
+        - name: image-tag
+          value: "${params.image-tag}"
+        - name: target-namespace
+          value: "${params.target-namespace}"
+    - name: generate-load
+      taskRef:
+        name: generate-load
+      runAfter: [ "deploy" ]
+      resources:
+        inputs:
+          - name: source-git
+            resource: git-source
+      params:
+        - name: experiment-id
+          value: "${params.experiment-id}"
+        - name: url
+          value: "${params.load-url}"
+        - name: frequency
+          value: "${params.load-frequency}"
+        - name: duration
+          value: "${params.load-duration}"
+    - name: run-experiment
+      taskRef:
+        name: run-experiment
+      runAfter: [ "deploy" ]
+      resources:
+        inputs:
+          - name: source
+            resource: git-source
+      params:
+        - name: experiment
+          value: "${params.experiment-template}"
+        - name: experiment-id
+          value: "${params.experiment-id}"
+        - name: stable
+          value: "${params.stable}"
+        - name: candidate
+          value: "${params.candidate}"
+        - name: target-namespace
+          value: "${params.target-namespace}"
+    - name: wait-experiment-completion
+      taskRef:
+        name: wait-experiment-completion
+      runAfter: [ "run-experiment" ]
+      resources:
+        inputs:
+          - name: source-git
+            resource: git-source
+      params:
+        - name: experiment-template
+          value: "${params.experiment-template}"
+        - name: experiment-id
+          value: "${params.experiment-id}"
+        - name: target-namespace
+          value: "${params.target-namespace}"
+        - name: frequency
+          value: "${params.test-frequency}"
+        - name: duration
+          value: "${params.test-duration}"
