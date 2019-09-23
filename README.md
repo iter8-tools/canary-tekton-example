@@ -115,7 +115,7 @@ You can use any `ServiceAccount`. If you use a non-default account, it will be n
 ## Task: Build New Version
 
 We build our image and push it to DockerHub using [Kaniko](https://github.com/GoogleContainerTools/kaniko/).
-Kaniko both builds and pushes the resulting image to DockerHub. The full `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/build.yaml).
+Kaniko both builds and pushes the resulting image to DockerHub. The full Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/build.yaml).
 
 ## Task: Create Experiment
 
@@ -125,7 +125,7 @@ The main challenge is to identify the current version. We rely on labels iter8 a
 
 For the new version we use the short commit id of the repo being built.
 
-The full definition of the task is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/create-experiment.yaml).
+The full definition of the Tekton `Task` is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/create-experiment.yaml).
 
 ## Task: Deploy New Version
 
@@ -137,7 +137,7 @@ The task implements 4 steps:
 3. `log-deployment` - logs the generated deployment yaml
 4. `apply` - applies the deployment yaml via `kubectl`
 
-The full task definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/deploy.yaml).
+The full Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/deploy.yaml).
 
 ## Task: Generate Load
 
@@ -172,13 +172,13 @@ For simplicity we used a volume of type HostPath. This works because we are usin
         requests:
           storage: 2Ki
 
-The final task definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/generate-load.yaml)
+The final Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/generate-load.yaml)
 
 ## Task: Wait for completion
 
 A task to test for completion monitors progress. When the canary rollout is complete, it identifies (based on the `status` of the `Experiment`) which deployment (the original or the the new) is being used and deletes the other one to save resources. Finally, it touches a shared file to trigger the termination of load.
 
-The task definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/wait-completion.yaml)
+The Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/wait-completion.yaml)
 
 ## Putting it together
 
