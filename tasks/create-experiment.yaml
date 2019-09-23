@@ -1,0 +1,65 @@
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: create-experiment-task
+spec:
+  inputs:
+    resources:
+      - name: git-source
+        type: git
+      - name: docker-image
+        type: image
+    params:
+      - name: image-tag
+        default: latest
+      - name: experiment
+        description: template for experiment
+        default: iter8/experiment.yaml
+      - name: experiment-id
+        description: guid for experiment
+        default: latest
+      - name: target-namespace
+        description: namespace to which candidate will be deployed
+        default: default
+      - name: kustomize-dir
+        default: kustomize
+      - name: patch-file
+        default: patch.yaml
+  steps:
+    - name: identify-stable
+      image: kalantar/yq-kubernetes
+      command: [ "/bin/bash" ]
+      args:
+        - '-c'
+        - |
+          IMAGE_TAG=${inputs.params.image-tag}
+          KUSTOMIZE_DIR=/workspace/git-source/${inputs.params.kustomize-dir}
+          PATCH_FILE=${KUSTOMIZE_DIR}/${inputs.params.patch-file}
+          PIPELINE_IMAGE_URL=${inputs.resources.docker-image.url}
+          echo "PATCH_FILE=$PATCH_FILE"
+          echo "PIPELINE_IMAGE_URL=$PIPELINE_IMAGE_URL"
+
+          # Identify the candidate deployment version by generating deployment yaml
+          sed -i -e "s#iter8/reviews:istio-VERSION#${PIPELINE_IMAGE_URL}#" ${PATCH_FILE}
+          sed -i -e "s#VERSION#${IMAGE_TAG}#g" ${PATCH_FILE}
+          cat ${PATCH_FILE} 
+          kustomize build $KUSTOMIZE_DIR
+          CANDIDATE_DEPLOYMENT_NAME=$(kustomize build $KUSTOMIZE_DIR | yq r - metadata.name)
+
+          # Identify the baseline deployment by inspecting the target namespace
+          CLUSTER_NAMESPACE=${inputs.params.target-namespace}
+          EXPERIMENT_TEMPLATE_FILE=/workspace/git-source/${inputs.params.experiment}
+          source <(curl -sSL "https://raw.githubusercontent.com/iter8-tools/iter8-toolchain-rollout/master/scripts/identify_stable.sh")
+          if [[ -z $BASELINE_DEPLOYMENT_NAME ]]; then BASELINE_DEPLOYMENT_NAME=$CANDIDATE_DEPLOYMENT_NAME; fi
+
+          # Create a version specific experiment name
+          EXPERIMENT_ID=${inputs.params.image-tag}
+          EXPERIMENT_NAME=$(yq read ${EXPERIMENT_TEMPLATE_FILE} metadata.name)-${EXPERIMENT_ID}
+
+          echo "EXPERIMENT_NAME=$EXPERIMENT_NAME"
+          echo "CANDIDATE_DEPLOYMENT_NAME=${CANDIDATE_DEPLOYMENT_NAME}"
+          echo "BASELINE_DEPLOYMENT_NAME=${BASELINE_DEPLOYMENT_NAME}"
+
+          # Create the experiment resource
+          ON_SUCCESS=candidate
+          source <(curl -sSL "https://raw.githubusercontent.com/iter8-tools/iter8-toolchain-rollout/master/scripts/create_experiment.sh")

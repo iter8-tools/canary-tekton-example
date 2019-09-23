@@ -1,0 +1,44 @@
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: wait-completion-task
+spec:
+  inputs:
+    resources:
+      - name: git-source
+        type: git
+    params:
+      - name: experiment-template
+        description: yaml template for experiment
+        default: template.yaml
+      - name: experiment-id
+        description: unique identifier for experiment such as a build number
+        default: id
+      - name: target-namespace
+        description: namespace in which experiment is running
+        default: default
+  steps:
+    - name: wait
+      image: kalantar/yq-kubectl
+      command: [ '/bin/bash' ]
+      args:
+        - '-c'
+        - |
+          # DURATION
+          # SLEEP_TIME
+          EXPERIMENT_TEMPLATE_FILE=/workspace/git-source/${inputs.params.experiment-template}
+          EXPERIMENT_ID=${inputs.params.experiment-id}
+          EXPERIMENT_NAME=$(yq read ${EXPERIMENT_TEMPLATE_FILE} metadata.name)-${EXPERIMENT_ID}
+
+          CLUSTER_NAMESPACE=${inputs.params.target-namespace}
+          FORCE_TERMINATION=
+          IDS_STAGE_NAME="wait-experiment-completion"
+          STATUS_FILE="/status/done-${EXPERIMENT_ID}"
+          source <(curl -sSL "https://raw.githubusercontent.com/iter8-tools/iter8-toolchain-rollout/master/scripts/wait_complete_new.sh")
+      volumeMounts:
+        - name: status
+          mountPath: /status
+  volumes:
+    - name: status
+      persistentVolumeClaim:
+        claimName: experiment-stop-claim

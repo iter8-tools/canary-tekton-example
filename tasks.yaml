@@ -12,43 +12,22 @@ spec:
         default: /workspace/extracted/Dockerfile
       - name: pathToContext
         default: /workspace/extracted
-      - name: imageTag
-        default: latest
   outputs:
     resources:
       - name: docker-image
         type: image
   steps:
-    - name: echo
-      image: alpine
-      command: [ '/bin/sh' ]
-      args:
-        - '-c'
-        - |
-          echo "/kaniko/executor"
-          echo "--verbosity=debug"
-          echo "--dockerfile=${inputs.params.pathToDockerFile}"
-          echo "--destination=${outputs.resources.docker-image.url}"
-          echo "--context=${inputs.params.pathToContext}"
-          echo "--skip-tls-verify"
     - name: build-push-step
       env:
       - name: DOCKER_CONFIG
         value: /builder/home/.docker
-      image: gcr.io/kaniko-project/executor:debug
-      command:
-        - /kaniko/executor
+      image: gcr.io/kaniko-project/executor
+      command: [ "/kaniko/executor" ]
       args:
-        - --verbosity=debug
         - --dockerfile=${inputs.params.pathToDockerFile}
         - --destination=${outputs.resources.docker-image.url}
         - --context=${inputs.params.pathToContext}
         - --skip-tls-verify
-  volumes:
-    - name: docker-socket
-      hostPath:
-        path: /var/run/docker.sock
-        type: Socket
 ---
 apiVersion: tekton.dev/v1alpha1
 kind: Task
@@ -271,120 +250,3 @@ spec:
     - name: status
       persistentVolumeClaim:
         claimName: experiment-stop-claim
----
-apiVersion: tekton.dev/v1alpha1
-kind: Pipeline
-metadata:
-  name: build-canary-deploy-pipeline
-spec:
-  resources:
-    - name: git-source
-      type: git
-    - name: docker-image
-      type: image
-  params:
-    - name: image-tag
-      default: latest
-    - name: image-name
-      default: index.docker.io/myservice
-    - name: release-name
-      default: myservice
-    - name: repository-name
-      default: myservice
-    - name: target-namespace
-      default: default
-    - name: docker-registry
-      default: index.docker.io
-
-    - name: pathToDockerFile
-      default: /workspace/git-source/Dockerfile
-    - name: pathToContext
-      default: /workspace/git-source
-    - name: experiment
-      default: "iter8/experiment.yaml"
-    - name: experiment-id
-      default: guid
-    - name: stable
-      default: stable
-    - name: candidate
-      default: candidate
-  tasks:
-    - name: build
-      taskRef:
-        name: build-task
-      resources:
-        inputs:
-          - name: git-source
-            resource: git-source
-        outputs:
-          - name: docker-image
-            resource: docker-image
-      params:
-        - name: pathToDockerFile
-          value: ${params.pathToDockerFile}
-        - name: pathToContext
-          value: ${params.pathToContext}
-        - name: imageTag
-          value: ${params.image-tag}
-    - name: generate-load
-      taskRef:
-        name: generate-load-task
-      runAfter: ["build"]
-      resources:
-        inputs:
-          - name: git-source
-            resource: git-source
-      params:
-        - name: image-tag
-          value: "${params.image-tag}"
-        - name: target-namespace
-          value: "${params.target-namespace}"
-    - name: create-experiment
-      taskRef:
-        name: create-experiment-task
-      runAfter: ["build"]
-      resources:
-        inputs:
-          - name: git-source
-            resource: git-source
-          - name: docker-image
-            resource: docker-image
-      params:
-        - name: image-tag
-          value: "${params.image-tag}"
-        - name: experiment
-          value: "${params.experiment}"
-        - name: experiment-id
-          value: "${params.image-tag}"
-        - name: target-namespace
-          value: "${params.target-namespace}"
-    - name: deploy
-      taskRef:
-        name: deploy-task
-      runAfter: ["create-experiment"]
-      resources:
-        inputs:
-          - name: git-source
-            resource: git-source
-          - name: docker-image
-            resource: docker-image
-      params:
-        - name: image-tag
-          value: "${params.image-tag}"
-        - name: target-namespace
-          value: "${params.target-namespace}"
-    - name: wait-completion
-      taskRef:
-        name: wait-completion-task
-      runAfter: [ "create-experiment" ]
-      resources:
-        inputs:
-          - name: git-source
-            resource: git-source
-      params:
-        - name: experiment-template
-          value: "${params.experiment}"
-        - name: experiment-id
-          value: "${params.image-tag}"
-        - name: target-namespace
-          value: "${params.target-namespace}"

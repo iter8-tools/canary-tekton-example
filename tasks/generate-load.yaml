@@ -1,0 +1,60 @@
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: generate-load-task
+spec:
+  inputs:
+    resources:
+      - name: git-source
+        type: git
+    params:
+      - name: image-tag
+        default: latest
+      - name: target-namespace
+        default: default
+      - name: pipeline-properties
+        default: iter8/pipeline.prop
+  steps:
+    - name: generate-load
+      image: kalantar/yq-kubernetes
+      command: [ "/bin/bash" ]
+      args:
+        - '-c'
+        - |
+          EXPERIMENT_ID=${inputs.params.image-tag}
+          CLUSTER_NAMESPACE=${inputs.params.target-namespace}
+          PROPERTY_FILE=/workspace/git-source/${inputs.params.pipeline-properties}
+
+          # Identify application URL
+          HOST=$(grep app-host ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//')
+          HOST=$(echo $HOST | sed "s#NAMESPACE#$CLUSTER_NAMESPACE#")
+          LOADBALANCER=$(kubectl --namespace istio-system get service istio-ingressgateway --output jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          PORT=$(grep app-port ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//') 
+          PORT=$(kubectl --namespace istio-system get service istio-ingressgateway --output jsonpath="{.spec.ports[?(@.targetPort==$PORT)].nodePort}")
+          URL_PATH=$(grep app-path ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//')
+          URL="http://$LOADBALANCER:$PORT/$URL_PATH"
+          echo "Application URL = $URL"
+
+          # Generate requests until wait-complete-task writes to $STATUS_FILE or timeout
+          DURATION=$(grep load-duration ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//')
+          FREQUENCY=$(grep load-frequency ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//')
+          STATUS_FILE="/status/done-${EXPERIMENT_ID}"
+          COUNT=0
+          startS=$(date +%s)
+          timePassedS=$(( $(date +%s) - $startS ))
+          while [ $timePassedS -lt $DURATION ]; do
+            if [ -f ${STATUS_FILE} ]; then break; fi
+            sleep ${FREQUENCY}
+            curl -H "Host: $HOST" -o /dev/null -s -w "%{http_code}\n" $URL
+            COUNT=$(( $COUNT + 1 ))
+            timePassedS=$(( $(date +%s) - $startS ))
+          done
+          echo "Sent ${COUNT} queries over ${timePassedS}s"
+          rm ${STATUS_FILE} || true # ignore case when no such file
+      volumeMounts:
+        - name: status
+          mountPath: /status
+  volumes:
+    - name: status
+      persistentVolumeClaim:
+        claimName: experiment-stop-claim
