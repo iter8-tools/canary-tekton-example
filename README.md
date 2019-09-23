@@ -110,14 +110,12 @@ For additional information on authentication, see the [Tekton Documentation](htt
 
 ### Add Secret (s) to ServiceAccount
 
-
-
 You can use any `ServiceAccount`. If you use a non-default account, it will be necessary to specify this in the `PipelineRun` you create to run the pipeline (see below). For simplicity, we used the default service account.
 
 ## Task: Build New Version
 
 We build our image and push it to DockerHub using [Kaniko](https://github.com/GoogleContainerTools/kaniko/).
-Kaniko both builds and pushes the resulting image to DockerHub. The full `Task` definition is [here]().
+Kaniko both builds and pushes the resulting image to DockerHub. The full `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/build.yaml).
 
 ## Task: Create Experiment
 
@@ -127,11 +125,11 @@ The main challenge is to identify the current version. We rely on labels iter8 a
 
 For the new version we use the short commit id of the repo being built.
 
-The full definition of the task is [here]().
+The full definition of the task is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/create-experiment.yaml).
 
 ## Task: Deploy New Version
 
-To deploy an image, we use [kustomize]() to create a version specific deployment yaml. This allows us genertate as many resources as are needed; there is no assumption that only a `Deployment` is being created. We assume the kustomize configuration is stored in the source code repository.
+To deploy an image, we use [kustomize](https://github.com/kubernetes-sigs/kustomize) to create a version specific deployment yaml. This allows us genertate as many resources as are needed; there is no assumption that only a `Deployment` is being created. We assume the kustomize configuration is stored in the source code repository.
 The task implements 4 steps:
 
 1. `modify-patch` - modifies a kustomize patch to be version aware
@@ -139,30 +137,50 @@ The task implements 4 steps:
 3. `log-deployment` - logs the generated deployment yaml
 4. `apply` - applies the deployment yaml via `kubectl`
 
-The full task definition is:
-
-    apiVersion: tekton.dev/v1alpha1
-    kind: Task
-    metadata:
-      name: deploy-task
+The full task definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/deploy.yaml).
 
 ## Task: Generate Load
 
-    apiVersion: tekton.dev/v1alpha1
-    kind: Task
+Iter8 can evaluate the success of a new version if there is load against the system. The load generates meaninful metric data used by iter8 to assess the new version. Since bookinfo is a toy application, we added a task to our pipeline to generate load against the application. The benefit of adding a task instead of doing this manually is that we don't forget to start the load generation.
+
+Once we start load, we face the problem of stopping it when a canary rollout is complete. To accomplish this we add a shared persistent volume between this task and the "wait-completion" task. When the latter identifies a completed rollout, it touches a file on the shared volume. The load-generator watches for this change and terminates the load.
+
+For simplicity we used a volume of type HostPath. This works because we are using a single node cluster:
+
+    kind: PersistentVolume
+    apiVersion: v1
     metadata:
-      name: generate-load-task
+      name: experiment-stop-volume
+    spec:
+      storageClassName: manual
+      capacity:
+        storage: 100Ki
+      accessModes:
+        - ReadWriteOnce
+      hostPath:
+        path: "/mnt/stop"
+    ---
+    kind: PersistentVolumeClaim
+    apiVersion: v1
+    metadata:
+      name: experiment-stop-claim
+    spec:
+      storageClassName: manual
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 2Ki
+
+The final task definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/generate-load.yaml)
 
 ## Task: Wait for completion
 
-A task to test for completion monitors 
+A task to test for completion monitors progress. When the canary rollout is complete, it identifies (based on the `status` of the `Experiment`) which deployment (the original or the the new) is being used and deletes the other one to save resources. Finally, it touches a shared file to trigger the termination of load.
 
-    apiVersion: tekton.dev/v1alpha1
-    kind: Task
-    metadata:
-      name: wait-completion-task
+The task definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/wait-completion.yaml)
 
-## Pipeline: Putting it together
+## Putting it together
 
     apiVersion: tekton.dev/v1alpha1
     kind: Pipeline
