@@ -61,24 +61,25 @@ You can test the application:
 
 ### Define PipelineResources
 
-In order to load a GitHub project and write/read a DockerHub image, in a Tekton pipeline, it is necessary to define `PipelineResource` resources. For additional details about `PipelineResource`, see the [Tekton documentation](https://github.com/tektoncd/pipeline/blob/master/docs/resources.md). 
+In order to load a GitHub project and write/read a DockerHub image, in a Tekton pipeline, it is necessary to define `PipelineResource` resources. For additional details about `PipelineResource`, see the [Tekton documentation](https://github.com/tektoncd/pipeline/blob/master/docs/resources.md).
 Two resources are needed, one for the git project and for the DockerHub image we will build.
 
 You can create the GitHub repo by cloning the [iter8 repo](https://github.com/iter8-tools/bookinfoapp-reviews) The Github resource can be specified as:
 
-apiVersion: tekton.dev/v1alpha1
-kind: PipelineResource
-metadata:
-  name: reviews-repo
-spec:
-  type: git
-  params:
-  - name: revision
-    value: master
-  - name: url
-    value: https://github.com/<your github org>/bookinfoapp-reviews
+    apiVersion: tekton.dev/v1alpha1
+    kind: PipelineResource
+    metadata:
+      name: reviews-repo
+    spec:
+      type: git
+      params:
+      - name: revision
+        value: master
+      - name: url
+        value: https://github.com/<your github org>/bookinfoapp-reviews
 
 The DockerHub image can be specified as:
+
     apiVersion: tekton.dev/v1alpha1
     kind: PipelineResource
     metadata:
@@ -108,9 +109,11 @@ If your git repository is private you will also need to define a secret to allow
 
 For additional information on authentication, see the [Tekton Documentation](https://github.com/tektoncd/pipeline/blob/master/docs/auth.md).
 
-### Add Secret (s) to ServiceAccount
+#### Add Secret (s) to ServiceAccount
 
 You can use any `ServiceAccount`. If you use a non-default account, it will be necessary to specify this in the `PipelineRun` you create to run the pipeline (see below). For simplicity, we used the default service account.
+
+    TBD
 
 ## Task: Build New Version
 
@@ -182,10 +185,16 @@ The Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tek
 
 ## Putting it together
 
-    apiVersion: tekton.dev/v1alpha1
-    kind: Pipeline
-    metadata:
-      name: build-canary-deploy-pipeline
+A `Pipeline` resource puts the tasks together and allows us to specify dependencies between them. Further, we can map pipeline level paramters to task specific parameters.
+
+We use `runAfter` to create this execution order:
+
+         / -> generate load
+    build                      / -> deploy
+         \ -> create-experiment 
+                               \ -> wait-completion
+
+The completed Tekton `Pipeline` is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/pipeline.yaml).
 
 ## Running the Pipeline
 
