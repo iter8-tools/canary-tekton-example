@@ -28,7 +28,7 @@ At a high level, the pipeline we wish to create contains the following three tas
 
 Once the candidate version is deployed, the iter8 controller will manage the canary deployment.
 
-Since we are using a toy application, we will need a way to drive load against the service. The iter8 analytics engine is not able to compare the candidate version to the existing base version if there is no load. We don't want to manually start this load, nor do we want to drive load when we aren't running a canary test. To do this, two additional tasks: one to generate load and one to monitor for completion that causes load to terminate. Finally, we can add a task to delete whichever version we decide not to keep.
+Since we are using a toy application, we will need a way to drive load against the service. The iter8 analytics engine is not able to compare the candidate version to the existing base version if there is no load. We don't want to manually start this load, nor do we want to drive load when we aren't running a canary test. To do this, two additional tasks: one to generate load and one to monitor for completion and causes load to terminate. Finally, we can add a task to delete whichever version we decide not to keep.
 
 Our pipeline now looks like this:
 
@@ -46,18 +46,49 @@ For your convenience, the definitions used in this blog can be found in [here](h
 
 We will explore a pipline for the reivews microservice in the [bookinfo application](https://istio.io/docs/examples/bookinfo/), a sample application developed for demonstrating features of Istio. In particiular, we will build a pipeline for building and rolling out new versions of the reviews microservice. For simplicity the source this service has been copied to [this repository](https://github.com/iter8-tools/bookinfoapp-reviews) which can be cloned for your own testing.
 
-Since the microservice is one of serveral that comprise the application, it is necessary to deploy the remaining services to your cluster. The following code can be used to do so (it assumes target namespace `bookinfo`)
+Since the microservice is one of serveral that comprise the application, it is necessary to deploy the remaining services to your cluster. The following code can be used to do so (it uses namespace `bookinfo` as an example)
 
-    kubectl create namespace bookinfo
-    kubectl label namespace istio-injection=enabled
-    kubectl --namespace bookinfo apply --filename https://raw.githubusercontent.com/iter8-tools/iter8-toolchain-rollout/master/scripts/bookinfo.yaml
-    curl -s https://raw.githubusercontent.com/iter8-tools/iter8-toolchain-rollout/master/scripts/bookinfo-gateway.yaml \
-      | sed 's/sample.dev/bookinfo/' \
-      | apply --namespace bookinfo --filename -
+    export NAMESPACE=bookinfo
+    kubectl create namespace ${NAMESPACE}
+    kubectl label namespace ${NAMESPACE} istio-injection=enabled
+    kubectl --namespace ${NAMESPACE} apply --filename https://raw.githubusercontent.com/kalantar/reviews/master/iter8/bookinfo.yaml
+    curl -s https://raw.githubusercontent.com/kalantar/reviews/master/iter8/bookinfo-gateway.yaml \
+      | sed "s#NAMESPACE#$NAMESPACE#" \
+      | kubectl apply --namespace ${NAMESPACE} --filename -
 
 You can test the application:
 
-    curl 
+    export GATEWAY_URL=$(kubectl get svc istio-ingressgateway --namespace istio-system --output 'jsonpath={.status.loadBalancer.ingress[0].ip}'):$(kubectl get svc istio-ingressgateway --namespace istio-system   --output 'jsonpath={.spec.ports[?(@.port==80)].nodePort}')
+    curl -H "Host: bookinfo.$NAMESPACE" -o /dev/null -s -w "%{http_code}\n" http://${GATEWAY_URL}/productpage
+
+### Authentication
+
+The build task reads the source code from a GitHub repository, builds a Docker image and pushes it to DockerHub. At execution time, the pods need permission to read GitHub and write to DockerHub. This can be accomplished by defining secrets and associating them with the service account that is used to run the pipeline.
+
+We used a public repository so no GitHub secret is needed. A secret for access to DockerHub can be defined as:
+
+    kubectl --namespace ${NAMESPACE} apply --filename - <<EOF
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: dockerhub
+      annotations:
+        tekton.dev/docker-0: https://index.docker.io
+    type: kubernetes.io/basic-auth
+    stringData:
+      username: <your DockerHub username>
+      password: <your DockerHub password>
+    EOF
+  
+For additional information on authentication, see the [Tekton Documentation](https://github.com/tektoncd/pipeline/blob/master/docs/auth.md).
+
+#### Add Secret (s) to ServiceAccount
+
+You can use any `ServiceAccount`. If you use a non-default account, it will be necessary to specify this in the `PipelineRun` you create to run the pipeline (see below). For simplicity, we used the default service account.
+
+    kubectl patch --namespace ${NAMESPACE} \
+      serviceaccount default \
+      --patch '{"secrets": [{"name": "dockerhub"}]}'
 
 ### Define PipelineResources
 
@@ -66,6 +97,7 @@ Two resources are needed, one for the git project and for the DockerHub image we
 
 You can create the GitHub repo by cloning the [iter8 repo](https://github.com/iter8-tools/bookinfoapp-reviews) The Github resource can be specified as:
 
+    kubectl --namespace ${NAMESPACE} apply --filename - <<EOF    
     apiVersion: tekton.dev/v1alpha1
     kind: PipelineResource
     metadata:
@@ -77,9 +109,11 @@ You can create the GitHub repo by cloning the [iter8 repo](https://github.com/it
         value: master
       - name: url
         value: https://github.com/<your github org>/bookinfoapp-reviews
+    EOF
 
 The DockerHub image can be specified as:
 
+    kubectl --namespace ${NAMESPACE} apply --filename - <<EOF
     apiVersion: tekton.dev/v1alpha1
     kind: PipelineResource
     metadata:
@@ -89,31 +123,7 @@ The DockerHub image can be specified as:
     params:
       - name: url
         value: index.docker.io/<your docker namespace>/reviews
-
-### Authentication
-
-We need to define a secret that will be used to authenticate with DockerHub. This will be needed to push the image once it is built. We use basic authentication as follows:
-
-    apiVersion: v1
-    kind: Secret
-    metadata:
-      name: dockerhub
-      annotations:
-        tekton.dev/docker-0: https://index.docker.io
-    type: kubernetes.io/basic-auth
-    stringData:
-      username: <your DockerHub username>
-      password: <your DockerHub password>
-
-If your git repository is private you will also need to define a secret to allow Tekton to access it. In our case, we use a public repository.
-
-For additional information on authentication, see the [Tekton Documentation](https://github.com/tektoncd/pipeline/blob/master/docs/auth.md).
-
-#### Add Secret (s) to ServiceAccount
-
-You can use any `ServiceAccount`. If you use a non-default account, it will be necessary to specify this in the `PipelineRun` you create to run the pipeline (see below). For simplicity, we used the default service account.
-
-    TBD
+    EOF
 
 ## Task: Build New Version
 
@@ -122,7 +132,7 @@ Kaniko both builds and pushes the resulting image to DockerHub. The full Tekton 
 
 ## Task: Create Experiment
 
-Iter8 configures Istio to gradually shift traffic from a current version of a Kubernetes application to a new version. It does this over time based on an assessment of the success of the new version. This assessment can be on its own or in comparison to the existing version. The `Experiment` that specifies this rollout is created from a template stored in `<repo>/iter8/experiment.yaml`. The `Create Experiemnt` task modifies this template to identify the current and next versions and creates the `Experiment`.
+Iter8 configures Istio to gradually shift traffic from a current version of a Kubernetes application to a new version. It does this over time based on an assessment of the success of the new version. This assessment can be on its own or in comparison to the existing version. The `Experiment` that specifies this rollout is created from a template stored in `iter8/experiment.yaml`. The `Create Experiemnt` task modifies this template to identify the current and next versions and creates the `Experiment`.
 
 The main challenge is to identify the current version. We rely on labels iter8 adds to the `DestinationRule`. These are used to match against the `Deployment` objects to find the current version. If iter8 has never been used, these labels do not exist so we select randomly select one of the matching deployments.
 
@@ -194,8 +204,59 @@ We use `runAfter` to create this execution order:
          \ -> create-experiment 
                                \ -> wait-completion
 
-The completed Tekton `Pipeline` is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/pipeline.yaml).
+The completed Tekton `Pipeline` is [here](
+  
+  https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/pipeline.yaml).
 
 ## Running the Pipeline
+
+The pipeline we have defined creates iter8 experiments, reads Istio virtual system and destination rules and creates deployments. The service account that runs the pipelines must have permission to take these actions.
+
+Once the permissions have been granted, a pipeline can be run by creating a `PipelineRun` resource.
+
+### Giving ServiceAccount the Needed Permissions
+
+A `ClusterRole` and `ClusterRoleBinding` can be used to define the necessary permissions and to assign it to the necessary `ServiceAccount`:
+
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: tekton-iter8-role
+    rules:
+    - apiGroups: [ "networking.istio.io" ]
+      resources: [ "destinationrules", "virtualservices" ]
+      verbs: [ "get", "list" ]
+    - apiGroups: [ "iter8.tools" ]
+      resources: [ "experiments" ]
+      verbs: [ "get", "list", "watch", "create", "update", "patch", "delete" ]
+    - apiGroups: [""]
+      resources: [ "services" ]
+      verbs: [ "get", "list", "watch" ]
+    - apiGroups: [ "extensions", "apps" ]
+      resources: [ "deployments" ]
+      verbs: [ "get", "list", "watch", "create", "update", "patch", "delete" ]
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: tekton-iter8-users
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: tekton-iter8-role
+    subjects:
+    - kind: ServiceAccount
+      name: default
+      namespace: bookinfo-iter8
+
+For convenience, these are defined [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tekton-iter8-role.yaml).
+
+### Create `PipelineRun`
+
+Finally, to execute a Tekton pipeline, we create a `PipelineRun`. When created, it manages the execution of the pipeline. We can follow the execution of the pipeline by observing the pods that are created. We can follow the execution of iter8 by observing the creation of the experiment:
+
+    watch kubectl --namespace bookinfo-iter8 experiments.iter8.tools
+
+An example `PipelineRun` is captured [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/pipelinerun.yaml).
 
 ## Conclusions
