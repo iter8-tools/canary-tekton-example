@@ -34,6 +34,7 @@ spec:
           FORCE_TERMINATION=
           IDS_STAGE_NAME="wait-experiment-completion"
           STATUS_FILE="/status/done-${EXPERIMENT_ID}"
+          if [ -f ${STATUS_FILE} ]; then rm -rf ${STATUS_FILE}; fi
           source <(curl -sSL "https://raw.githubusercontent.com/iter8-tools/iter8-toolchain-rollout/master/scripts/wait_complete_new.sh")
       volumeMounts:
         - name: status

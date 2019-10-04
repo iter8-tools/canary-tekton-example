@@ -2,23 +2,27 @@
 
 Recently released iter8 provides a means by which a new version of a service can be progressively rolled out using canary testing. Iter8 automatically configures Istio to gradually shift traffic from a current version to a new version. It compares metrics between the two versions and proceeds if the behavior of the new version is acceptable. Otherwise, it rolls back.
 
-In this blog, we explore the inclusion of canary testing in a CI/CD pipeline implemented using Tekton. In the first part we explore how to define a build, deploy and test pipeline. In the second part of the blog we explore its integration into Github via webhooks to create a truly automated flow. We will use a sample application created to demonstrate features of Istio, bookinfo.
+In this blog, we explore the inclusion of canary testing in a CI/CD pipeline implemented using Tekton. It builds on the tutorial[Automating canary releases with iter8 driven by Tekton](https://github.com/iter8-tools/docs/blob/master/doc_files/iter8_tekton_task.md). In the first part we explore how to define a build, deploy and test pipeline. In the second part of the blog we explore its integration into Github via webhooks to create a truly automated flow. We will use a sample application created to demonstrate features of Istio, bookinfo.
 
 ## Overview of iter8
 
-Iter8 automatically configures Istio to gradually shift traffic from a current version of a Kubernetes application to a new version. It does this over time based on an assessment of the success of the new version. This assessment can be on its own or in comparison to the existing version. Iter8 is implemented by a Kubernetes controller that watches for instances of an `experiment.iter8.tools` resource and managing the state of Istio over time to implement the traffic shift defined by the `experiment`. An `experiment` specification comprises three main subsections:
+Iter8 automatically configures Istio to gradually shift traffic from a current version of a Kubernetes application to a new version. It does this over time based on an assessment of the success of the new version. This assessment can be on its own or in comparison to the existing version. Iter8 is implemented by a Kubernetes controller that watches for instances of an `experiment.iter8.tools` resource and managing the state of Istio over time to implement the traffic shift defined by the experiment. An `experiment.iter8.tools` specification comprises three main subsections:
 
 - `targetService`: Identifies the deployments of the two versions of the service that will participate in the canary rollout.
 - `trafficControl`: Identifies the stategy by which traffic will be shifted from one version to another.
 - `analysis`: Defines the set of metrics that should be considered to determine if the new version is satisfactory and whether or not to continue.
 
-For more details, see the [iter8 documentation]().
+For more details, see the [iter8 documentation](https://github.com/iter8-tools/docs).
 
-To manage traffic, iter8 defines (or modifies) an Istio `VirtualService` and `DestinationRule`. In this way, the percentage of traffic sent to each version can be changed.
+To manage traffic, iter8 defines (or modifies) an Istio `VirtualService` and `DestinationRule` over time. In this way, the percentage of traffic sent to each version can gradually shifted from one version to the other.
 
-Note that as a side effect of this approach, if the two versions of the application are running before any `VirtualService` is defined, traffic will, by default, be sent to both versions. To avoid this, the iter8 `experiment` should be created before deploying the candidate version. The iter8 controller will define the `VirtualService` that avoids this scenario.
+Note that as a side effect of this approach, if the two versions of the application are running before any `VirtualService` is defined, traffic will, by default, be sent to both versions. To avoid this, the iter8 experiment should be created before deploying the candidate version. The iter8 controller will define the `VirtualService` that avoids this scenario.
 
 ## Overview of Tekton
+
+[Tekton Pipelines](https://github.com/tektoncd/pipeline/tree/master/docs) are an open source implementation of mechanisms to configure and run CI/CD style pipelines for a Kubernetes application. Kubernetes custom resources are used to define pipelines and their building blocks.
+
+In particular, one can define a set of `Tasks` that execute a series of steps, one in each container of a pod. These can be linked together in a `Pipeline`. A pipeline is configured and executed via `PipelineRun` custom resource.
 
 ## Pipline Overview
 
@@ -28,15 +32,15 @@ At a high level, the pipeline we wish to create contains the following three tas
 
 Once the candidate version is deployed, the iter8 controller will manage the canary deployment.
 
-Since we are using a toy application, we will need a way to drive load against the service. The iter8 analytics engine is not able to compare the candidate version to the existing base version if there is no load. We don't want to manually start this load, nor do we want to drive load when we aren't running a canary test. To do this, two additional tasks: one to generate load and one to monitor for completion and causes load to terminate. Finally, we can add a task to delete whichever version we decide not to keep.
+Since we are using a toy application, we will need a way to drive load against the service. The iter8 analytics engine is not able to compare the candidate version to the existing base version if there is no load. We don't want to manually start this load, nor do we want to drive load when we aren't running a canary test. To do this, two additional tasks: one to generate load and one to monitor for completion and causes load to terminate.
 
 Our pipeline now looks like this:
 
-                               /-> Generate Load
-    Build -> Create Experiment -> Deploy
-                               \-> Wait For Completion -> Delete
+                               /-> generate load
+    build -> create experiment -> deploy new version
+                               \-> Wait for completion and delete
 
-Each task is reviewed in detail in the subsequence sections below.
+Each task is reviewed in detail below. However, we consider some preliminary issues first.
 
 For your convenience, the definitions used in this blog can be found in [here](http://github.com/iter8-tools/iter8-tekton-blog).
 
@@ -44,7 +48,7 @@ For your convenience, the definitions used in this blog can be found in [here](h
 
 ### Sample Application
 
-We will explore a pipline for the reivews microservice in the [bookinfo application](https://istio.io/docs/examples/bookinfo/), a sample application developed for demonstrating features of Istio. In particiular, we will build a pipeline for building and rolling out new versions of the reviews microservice. For simplicity the source this service has been copied to [this repository](https://github.com/iter8-tools/bookinfoapp-reviews) which can be cloned for your own testing.
+We will explore a pipline for the _reviews_ microservice in the [bookinfo application](https://istio.io/docs/examples/bookinfo/), a sample application developed for demonstrating features of Istio. In particiular, we will build a pipeline for building and rolling out new versions of the reviews microservice. For simplicity the source this service has been copied to [this repository](https://github.com/iter8-tools/bookinfoapp-reviews) which can be cloned for your own testing.
 
 Since the microservice is one of serveral that comprise the application, it is necessary to deploy the remaining services to your cluster. The following code can be used to do so (it uses namespace `bookinfo` as an example)
 
@@ -95,7 +99,7 @@ You can use any `ServiceAccount`. If you use a non-default account, it will be n
 In order to load a GitHub project and write/read a DockerHub image, in a Tekton pipeline, it is necessary to define `PipelineResource` resources. For additional details about `PipelineResource`, see the [Tekton documentation](https://github.com/tektoncd/pipeline/blob/master/docs/resources.md).
 Two resources are needed, one for the git project and for the DockerHub image we will build.
 
-You can create the GitHub repo by cloning the [iter8 repo](https://github.com/iter8-tools/bookinfoapp-reviews) The Github resource can be specified as:
+You can create the GitHub repo by cloning or forking the [iter8 repo](https://github.com/iter8-tools/bookinfoapp-reviews) The Github resource can be specified as:
 
     kubectl --namespace ${NAMESPACE} apply --filename - <<EOF    
     apiVersion: tekton.dev/v1alpha1
@@ -120,7 +124,7 @@ The DockerHub image can be specified as:
       name: reviews-image
     spec:
       type: image
-    params:
+      params:
       - name: url
         value: index.docker.io/<your docker namespace>/reviews
     EOF
@@ -128,7 +132,9 @@ The DockerHub image can be specified as:
 ## Task: Build New Version
 
 We build our image and push it to DockerHub using [Kaniko](https://github.com/GoogleContainerTools/kaniko/).
-Kaniko both builds and pushes the resulting image to DockerHub. The full Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/build.yaml).
+Kaniko both builds and pushes the resulting image to DockerHub. The full Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/build.yaml). It can be applied as:
+
+    kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/tasks/build.yaml?token=AAAKR-I2-xCLr0TtF3lkLn4H8Rkf_drbks5dnj_QwA%3D%3D
 
 ## Task: Create Experiment
 
@@ -138,7 +144,9 @@ The main challenge is to identify the current version. We rely on labels iter8 a
 
 For the new version we use the short commit id of the repo being built.
 
-The full definition of the Tekton `Task` is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/create-experiment.yaml).
+The full definition of the Tekton `Task` is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/create-experiment.yaml). It can be applied as:
+
+   kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/tasks/create-experiment.yaml?token=AAAKR3tY-Q53wGjNC6UQEwR1BCfVcv77ks5dnkJqwA%3D%3D
 
 ## Task: Deploy New Version
 
@@ -150,7 +158,9 @@ The task implements 4 steps:
 3. `log-deployment` - logs the generated deployment yaml
 4. `apply` - applies the deployment yaml via `kubectl`
 
-The full Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/deploy.yaml).
+The full Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/deploy.yaml). It can be applied as:
+
+    kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/tasks/deploy.yaml?token=AAAKR25UFk7e3LlnIlkzEC8KYsf-UjrNks5dnkAowA%3D%3D
 
 ## Task: Generate Load
 
@@ -185,13 +195,17 @@ For simplicity we used a volume of type HostPath. This works because we are usin
         requests:
           storage: 2Ki
 
-The final Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/generate-load.yaml)
+The final Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/generate-load.yaml). It can be applied as:
+
+    kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/tasks/generate-load.yaml?token=AAAKR9oP4ndV3QkLkmOnsQGhkg6c0Tbyks5dnkF3wA%3D%3D
 
 ## Task: Wait for completion
 
 A task to test for completion monitors progress. When the canary rollout is complete, it identifies (based on the `status` of the `Experiment`) which deployment (the original or the the new) is being used and deletes the other one to save resources. Finally, it touches a shared file to trigger the termination of load.
 
-The Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/wait-completion.yaml)
+The Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/wait-completion.yaml). It can be appkied as:
+
+    kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/tasks/wait-completion.yaml?token=AAAKRwYi55q5g_8sBLRA1qQ5bm-PKAF6ks5dnkG-wA%3D%3D
 
 ## Putting it together
 
@@ -204,9 +218,9 @@ We use `runAfter` to create this execution order:
          \ -> create-experiment 
                                \ -> wait-completion
 
-The completed Tekton `Pipeline` is [here](
-  
-  https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/pipeline.yaml).
+The completed Tekton `Pipeline` is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/pipeline.yaml). It can be applied as:
+
+    kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/pipeline.yaml?token=AAAKR5yjd2QiLDqOs67G-GODmwJ_VTNeks5dnka-wA%3D%3D
 
 ## Running the Pipeline
 
@@ -239,7 +253,7 @@ A `ClusterRole` and `ClusterRoleBinding` can be used to define the necessary per
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
-      name: tekton-iter8-users
+      name: tekton-${NAMESPACE}
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
@@ -247,7 +261,7 @@ A `ClusterRole` and `ClusterRoleBinding` can be used to define the necessary per
     subjects:
     - kind: ServiceAccount
       name: default
-      namespace: bookinfo-iter8
+      namespace: ${NAMESPACE}
 
 For convenience, these are defined [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tekton-iter8-role.yaml).
 
@@ -255,8 +269,10 @@ For convenience, these are defined [here](https://github.ibm.com/kalantar/iter8-
 
 Finally, to execute a Tekton pipeline, we create a `PipelineRun`. When created, it manages the execution of the pipeline. We can follow the execution of the pipeline by observing the pods that are created. We can follow the execution of iter8 by observing the creation of the experiment:
 
-    watch kubectl --namespace bookinfo-iter8 experiments.iter8.tools
+    watch kubectl --namespace ${NAMESPACE} experiments.iter8.tools
 
-An example `PipelineRun` is captured [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/pipelinerun.yaml).
+An example `PipelineRun` is captured [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/pipelinerun.yaml). It can be applied as:
+
+    kubectl --namespace ${NAMESPACE} apply --filename 
 
 ## Conclusions
