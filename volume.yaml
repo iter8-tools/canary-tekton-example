@@ -1,22 +1,9 @@
-kind: PersistentVolume
-apiVersion: v1
-metadata:
-  name: experiment-stop-volume
-spec:
-  storageClassName: manual
-  capacity:
-    storage: 100Ki
-  accessModes:
-    - ReadWriteOnce
-  hostPath:
-    path: "/mnt/stop"
----
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
-  name: experiment-stop-claim
+  name: experiment-stop-claim-bookinfo-iter8
 spec:
-  storageClassName: manual
+  storageClassName: default
   accessModes:
     - ReadWriteOnce
   resources:

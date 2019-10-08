@@ -35,6 +35,16 @@ spec:
     - name: candidate
       default: candidate
   tasks:
+    - name: deploy-app
+      taskRef:
+        name: deploy-bookinfo-task
+      resources:
+        inputs:
+          - name: git-source
+            resource: git-source
+      params:
+        - name: target-namespace
+          value: "${params.target-namespace}"
     - name: build
       taskRef:
         name: build-task

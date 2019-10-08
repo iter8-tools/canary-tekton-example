@@ -1,28 +1,18 @@
-# Creating a Tekton Pipeline Using iter8 to Rollout Applications
+# Tekton Artifacts for iter8
 
-Recently released iter8 provides a means by which a new version of a service can be progressively rolled out using canary testing. Iter8 automatically configures Istio to gradually shift traffic from a current version to a new version. It compares metrics between the two versions and proceeds if the behavior of the new version is acceptable. Otherwise, it rolls back.
+This project contains artifacts that can be used to create a Tekton pipeline to build a new version of an application and gradually roll it out using **iter8**.
 
-In this blog, we explore the inclusion of canary testing in a CI/CD pipeline implemented using Tekton. It builds on the tutorial[Automating canary releases with iter8 driven by Tekton](https://github.com/iter8-tools/docs/blob/master/doc_files/iter8_tekton_task.md). In the first part we explore how to define a build, deploy and test pipeline. In the second part of the blog we explore its integration into Github via webhooks to create a truly automated flow. We will use a sample application created to demonstrate features of Istio, bookinfo.
+This assumes a basic understanding of [iter8](https://github.com/iter8-tools/docs) and [Tekton](https://github.com/tektoncd/pipeline/tree/master/docs).
 
-## Overview of iter8
+## Design Considerations
 
-Iter8 automatically configures Istio to gradually shift traffic from a current version of a Kubernetes application to a new version. It does this over time based on an assessment of the success of the new version. This assessment can be on its own or in comparison to the existing version. Iter8 is implemented by a Kubernetes controller that watches for instances of an `experiment.iter8.tools` resource and managing the state of Istio over time to implement the traffic shift defined by the experiment. An `experiment.iter8.tools` specification comprises three main subsections:
+The following considerations were taken into account in the design of the artifacts:
 
-- `targetService`: Identifies the deployments of the two versions of the service that will participate in the canary rollout.
-- `trafficControl`: Identifies the stategy by which traffic will be shifted from one version to another.
-- `analysis`: Defines the set of metrics that should be considered to determine if the new version is satisfactory and whether or not to continue.
+- **reuse**  - Desire to reuse scripts developed and used for [Progressively rollout a Kubernetes app using iter8](https://github.com/open-toolchain/iter8-toolchain-rollout).
 
-For more details, see the [iter8 documentation](https://github.com/iter8-tools/docs).
+- **automated triggering** - Ability to integrate with the [webhook capability](https://github.com/tektoncd/experimental/tree/master/webhooks-extension) in [Tekton dashboards](https://github.com/tektoncd/dashboard) to trigger automated execution. This [limits](https://github.com/tektoncd/experimental/blob/master/webhooks-extension/docs/Limitations.md#pipeline-limitations) the number of configurable parameters.
 
-To manage traffic, iter8 defines (or modifies) an Istio `VirtualService` and `DestinationRule` over time. In this way, the percentage of traffic sent to each version can gradually shifted from one version to the other.
-
-Note that as a side effect of this approach, if the two versions of the application are running before any `VirtualService` is defined, traffic will, by default, be sent to both versions. To avoid this, the iter8 experiment should be created before deploying the candidate version. The iter8 controller will define the `VirtualService` that avoids this scenario.
-
-## Overview of Tekton
-
-[Tekton Pipelines](https://github.com/tektoncd/pipeline/tree/master/docs) are an open source implementation of mechanisms to configure and run CI/CD style pipelines for a Kubernetes application. Kubernetes custom resources are used to define pipelines and their building blocks.
-
-In particular, one can define a set of `Tasks` that execute a series of steps, one in each container of a pod. These can be linked together in a `Pipeline`. A pipeline is configured and executed via `PipelineRun` custom resource.
+- **flexibility** - Avoid assumptions about the application
 
 ## Pipline Overview
 
@@ -32,17 +22,19 @@ At a high level, the pipeline we wish to create contains the following three tas
 
 Once the candidate version is deployed, the iter8 controller will manage the canary deployment.
 
-Since we are using a toy application, we will need a way to drive load against the service. The iter8 analytics engine is not able to compare the candidate version to the existing base version if there is no load. We don't want to manually start this load, nor do we want to drive load when we aren't running a canary test. To do this, two additional tasks: one to generate load and one to monitor for completion and causes load to terminate.
+To simplify external requirements, we provide the following additional tasks that enable automated examples:
 
-Our pipeline now looks like this:
+- deploy bookinfo application
+- generate load
+- wait for iter8 to complete and delete the unused version
+
+The final pipeline would be something like:
 
                                /-> generate load
     build -> create experiment -> deploy new version
                                \-> Wait for completion and delete
 
-Each task is reviewed in detail below. However, we consider some preliminary issues first.
-
-For your convenience, the definitions used in this blog can be found in [here](http://github.com/iter8-tools/iter8-tekton-blog).
+Each task is reviewed in detail below.
 
 ## Preparation
 
@@ -71,6 +63,8 @@ The build task reads the source code from a GitHub repository, builds a Docker i
 
 We used a public repository so no GitHub secret is needed. A secret for access to DockerHub can be defined as:
 
+    DOCKER_USERNAME=<your DockerHub username>
+    DOCKER_PASSWORD=<your DockerHub password>
     kubectl --namespace ${NAMESPACE} apply --filename - <<EOF
     apiVersion: v1
     kind: Secret
@@ -80,8 +74,8 @@ We used a public repository so no GitHub secret is needed. A secret for access t
         tekton.dev/docker-0: https://index.docker.io
     type: kubernetes.io/basic-auth
     stringData:
-      username: <your DockerHub username>
-      password: <your DockerHub password>
+      username: ${DOCKER_USERNAME}
+      password: ${DOCKER_PASSWORD}
     EOF
   
 For additional information on authentication, see the [Tekton Documentation](https://github.com/tektoncd/pipeline/blob/master/docs/auth.md).
@@ -168,27 +162,27 @@ Iter8 can evaluate the success of a new version if there is load against the sys
 
 Once we start load, we face the problem of stopping it when a canary rollout is complete. To accomplish this we add a shared persistent volume between this task and the "wait-completion" task. When the latter identifies a completed rollout, it touches a file on the shared volume. The load-generator watches for this change and terminates the load.
 
-For simplicity we used a volume of type HostPath. This works because we are using a single node cluster:
+For simplicity we used a volume of the default `StorageClass`. In this example, we rely on dynamic  volume provisioning.
 
-    kind: PersistentVolume
-    apiVersion: v1
-    metadata:
-      name: experiment-stop-volume
-    spec:
-      storageClassName: manual
-      capacity:
-        storage: 100Ki
-      accessModes:
-        - ReadWriteOnce
-      hostPath:
-        path: "/mnt/stop"
-    ---
+    #kind: PersistentVolume
+    #apiVersion: v1
+    #metadata:
+    #  name: experiment-stop-volume
+    #spec:
+    #  storageClassName: manual
+    #  capacity:
+    #    storage: 100Ki
+    #  accessModes:
+    #    - ReadWriteOnce
+    #  hostPath:
+    #    path: "/mnt/stop"
+    #---
     kind: PersistentVolumeClaim
     apiVersion: v1
     metadata:
       name: experiment-stop-claim
     spec:
-      storageClassName: manual
+      storageClassName: default
       accessModes:
         - ReadWriteOnce
       resources:
@@ -238,14 +232,14 @@ A `ClusterRole` and `ClusterRoleBinding` can be used to define the necessary per
       name: tekton-iter8-role
     rules:
     - apiGroups: [ "networking.istio.io" ]
-      resources: [ "destinationrules", "virtualservices" ]
-      verbs: [ "get", "list" ]
+      resources: [ "destinationrules", "gateways", "virtualservices" ]
+      verbs: [ "get", "list", "watch", "create", "update", "patch", "delete" ]
     - apiGroups: [ "iter8.tools" ]
       resources: [ "experiments" ]
       verbs: [ "get", "list", "watch", "create", "update", "patch", "delete" ]
     - apiGroups: [""]
       resources: [ "services" ]
-      verbs: [ "get", "list", "watch" ]
+      verbs: [ "get", "list", "watch", "create", "update", "patch", "delete" ]
     - apiGroups: [ "extensions", "apps" ]
       resources: [ "deployments" ]
       verbs: [ "get", "list", "watch", "create", "update", "patch", "delete" ]

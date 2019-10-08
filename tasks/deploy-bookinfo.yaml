@@ -1,0 +1,47 @@
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: deploy-bookinfo-task
+spec:
+  inputs:
+    resources:
+    - name: git-source
+      type: git
+    params:
+    - name: target-namespace
+      default: default
+      type: string
+    - name: pipeline-properties
+      default: iter8/pipeline.prop
+      type: string
+  steps:
+    - name: deploy-all
+      image: kalantar/yq-kubernetes
+      command: [ "/bin/bash" ]
+      args:
+        - '-c'
+        - |
+          # get target namespace
+          NAMESPACE=${inputs.params.target-namespace}
+          echo "NAMESPACE = ${NAMESPACE}"
+
+          # look for HOST in properties file
+          PROPERTY_FILE=/workspace/git-source/${inputs.params.pipeline-properties}
+          HOST=$(grep app-host ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//')
+          # if set, replace well known environment variables
+          echo "Found in properties file app-host = $HOST"
+          if [[ -n ${HOST} ]]; then
+            HOST=$(echo ${HOST} | sed "s#\$NAMESPACE#${NAMESPACE}#")
+            echo "Found host = $HOST"
+          fi
+
+          # create services and deployments
+          kubectl --namespace ${NAMESPACE} apply --filename /workspace/git-source/bookinfo/bookinfo.yaml
+
+          # create virtual service and gateway
+          if [[ -n ${HOST} ]]; then
+            sed "s#\"\*\"#\"$HOST\"#" /workspace/git-source/bookinfo/bookinfo-gateway.yaml \
+              | kubectl apply --namespace ${NAMESPACE} --filename -
+          else
+              kubectl apply --namespace ${NAMESPACE} --filename /workspace/git-source/bookinfo/bookinfo-gateway.yaml
+          fi

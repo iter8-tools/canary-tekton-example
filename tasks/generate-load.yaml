@@ -28,7 +28,8 @@ spec:
           # Identify application URL
           HOST=$(grep app-host ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//')
           if [[ -n ${HOST} ]]; then
-            HOST=$(echo $HOST | sed "s#NAMESPACE#$CLUSTER_NAMESPACE#")
+            HOST=$(echo $HOST | sed "s#\$NAMESPACE#$CLUSTER_NAMESPACE#")
+            echo "HOST = $HOST"
           fi
           IP=$(kubectl --namespace istio-system get service istio-ingressgateway --output jsonpath='{.status.loadBalancer.ingress[0].ip}')
           if [[ -z ${IP} ]]; then
