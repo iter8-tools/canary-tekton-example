@@ -101,16 +101,18 @@ When executing a Tekton pipeline, the `PipelineRun` can be defined to run each t
 
 You can use any `ServiceAccount`. If you use a non-default account, it will be necessary to specify this in the `PipelineRun` you create to run the pipeline (see below). For simplicity, we show this with the default service account.
 
+    SERVICE_ACCOUNT=<service account>
     kubectl patch --namespace ${NAMESPACE} \
-      serviceaccount default \
+      serviceaccount ${SERVICE_ACCOUNT} \
       --patch '{"secrets": [{"name": "dockerhub"}]}'
 
 ### Give the ServiceAccount the Needed Permissions
 
 The pipeline tasks create iter8 experiments, reads Istio virtual system and destination rules and create kubernetes services and deployments. The service account that runs these tasks must have permission to take these actions.
 
-A `ClusterRole` and `ClusterRoleBinding` can be used to define the necessary permissions and to assign it to the necessary `ServiceAccount`:
+A `ClusterRole` and `ClusterRoleBinding` can be used to define the necessary permissions and to assign it to service account `${SERVICE_ACCOUNT}`
 
+    kubectl apply --namespace --apply -f <<EOF
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -139,10 +141,11 @@ A `ClusterRole` and `ClusterRoleBinding` can be used to define the necessary per
       name: tekton-iter8-role
     subjects:
     - kind: ServiceAccount
-      name: default
+      name: ${SERVICE_ACCOUNT}
       namespace: ${NAMESPACE}
+    EOF
 
-For convenience, these are defined [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tekton-iter8-role.yaml).
+For convenience, this is defined [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tekton-iter8-role.yaml).
 
 ### Optional: Define PipelineResources
 
@@ -181,34 +184,55 @@ The DockerHub image can be specified as:
         value: index.docker.io/<your docker namespace>/reviews
     EOF
 
+### Optional: Create `PersistentVolume` and `PersistentVolumeClaim`
+
+If using the load generation and wait for completion tasks, a `PersistentVolume` and `PersistentVolumeClaim` should be created. The volume is mounted by these tasks so that the load generation can be automatically stopped when the rollout is complete.
+
+For simplicity we used a volume of the default storage class. In this example, we rely on dynamic  volume provisioning:
+
+    kubectl --namespace $NAMESPACE --filename - <<EOF    kind: PersistentVolumeClaim
+    apiVersion: v1
+    metadata:
+      name: experiment-stop-claim
+    spec:
+      storageClassName: default
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 2Ki
+    EOF
+
+For convenience, this is defined [here](https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/volume.yaml?token=AAAKR3NNN9diaelRbgv0mX52DfkMYdmXks5dpiuWwA%3D%3D).
+
 ## Pipeline Tasks
 
 ## Task: Deploy Bookinfo Application
 
-The `deploy-bookinfo-task` deploys the bookinfo application with the exception of the *reviews* microservice.
+The `deploy-bookinfo-task` deploys the bookinfo application with the exception of the *reviews* microservice. It is configured using properites in `iter8/pipeline.prop`. This properties file provides a way to parameterize the pipeline without adding pipeline parameters. We take this approach because the webhooks extension limits the set of settable parameters.
 
-Further, it defined the needed 
+The task defines the needed Istio `VirtualService` and `Gateway` resources. By default these use Host `*`; ie, any host is valid. However, it is best practice to restrict this to match an expected DNS value. It can be set by setting the `app-host` field in `iter8/pipeline.prop`. The default value is `bookinfo.$NAMESPACE`
 
-It can be applied as:
+The task can be created as:
 
     kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/tasks/deploy-bookinfo.yaml?token=AAAKR09L-BD0-axwaWobd5_XX90SjzEGks5dpiLiwA%3D%3D
 
 ## Task: Build New Version
 
 We build our image and push it to DockerHub using [Kaniko](https://github.com/GoogleContainerTools/kaniko/).
-Kaniko both builds and pushes the resulting image to DockerHub. The full Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/build.yaml). It can be applied as:
+Kaniko both builds and pushes the resulting image to DockerHub. The full Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/build.yaml). It can be created as:
 
     kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/tasks/build.yaml?token=AAAKR-I2-xCLr0TtF3lkLn4H8Rkf_drbks5dnj_QwA%3D%3D
 
 ## Task: Create Experiment
 
-Iter8 configures Istio to gradually shift traffic from a current version of a Kubernetes application to a new version. It does this over time based on an assessment of the success of the new version. This assessment can be on its own or in comparison to the existing version. The `Experiment` that specifies this rollout is created from a template stored in `iter8/experiment.yaml`. The `Create Experiemnt` task modifies this template to identify the current and next versions and creates the `Experiment`.
+Iter8 configures Istio to gradually shift traffic from a current version of a Kubernetes application to a new version. It does this over time based on an assessment of the success of the new version. This assessment can be on its own or in comparison to the existing version. The `Experiment` that specifies this rollout is created from a template stored in `iter8/experiment.yaml`. The `create-experiment-task` modifies this template to identify the current and next versions and creates the experiment.
 
 The main challenge is to identify the current version. We rely on labels iter8 adds to the `DestinationRule`. These are used to match against the `Deployment` objects to find the current version. If iter8 has never been used, these labels do not exist so we select randomly select one of the matching deployments.
 
 For the new version we use the short commit id of the repo being built.
 
-The full definition of the Tekton `Task` is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/create-experiment.yaml). It can be applied as:
+The full definition of the Tekton `Task` is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/create-experiment.yaml). It can be created as:
 
    kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/tasks/create-experiment.yaml?token=AAAKR3tY-Q53wGjNC6UQEwR1BCfVcv77ks5dnkJqwA%3D%3D
 
@@ -222,7 +246,7 @@ The task implements 4 steps:
 3. `log-deployment` - logs the generated deployment yaml
 4. `apply` - applies the deployment yaml via `kubectl`
 
-The full Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/deploy.yaml). It can be applied as:
+The full Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/deploy.yaml). It can be created as:
 
     kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/tasks/deploy.yaml?token=AAAKR25UFk7e3LlnIlkzEC8KYsf-UjrNks5dnkAowA%3D%3D
 
@@ -232,34 +256,7 @@ Iter8 can evaluate the success of a new version if there is load against the sys
 
 Once we start load, we face the problem of stopping it when a canary rollout is complete. To accomplish this we add a shared persistent volume between this task and the "wait-completion" task. When the latter identifies a completed rollout, it touches a file on the shared volume. The load-generator watches for this change and terminates the load.
 
-For simplicity we used a volume of the default `StorageClass`. In this example, we rely on dynamic  volume provisioning.
-
-    #kind: PersistentVolume
-    #apiVersion: v1
-    #metadata:
-    #  name: experiment-stop-volume
-    #spec:
-    #  storageClassName: manual
-    #  capacity:
-    #    storage: 100Ki
-    #  accessModes:
-    #    - ReadWriteOnce
-    #  hostPath:
-    #    path: "/mnt/stop"
-    #---
-    kind: PersistentVolumeClaim
-    apiVersion: v1
-    metadata:
-      name: experiment-stop-claim
-    spec:
-      storageClassName: default
-      accessModes:
-        - ReadWriteOnce
-      resources:
-        requests:
-          storage: 2Ki
-
-The final Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/generate-load.yaml). It can be applied as:
+The final Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/generate-load.yaml). It can be created as:
 
     kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/tasks/generate-load.yaml?token=AAAKR9oP4ndV3QkLkmOnsQGhkg6c0Tbyks5dnkF3wA%3D%3D
 
@@ -267,7 +264,7 @@ The final Tekton `Task` definition is [here](https://github.ibm.com/kalantar/ite
 
 A task to test for completion monitors progress. When the canary rollout is complete, it identifies (based on the `status` of the `Experiment`) which deployment (the original or the the new) is being used and deletes the other one to save resources. Finally, it touches a shared file to trigger the termination of load.
 
-The Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/wait-completion.yaml). It can be appkied as:
+The Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/wait-completion.yaml). It can be created as:
 
     kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/tasks/wait-completion.yaml?token=AAAKRwYi55q5g_8sBLRA1qQ5bm-PKAF6ks5dnkG-wA%3D%3D
 
@@ -277,10 +274,14 @@ A `Pipeline` resource puts the tasks together and allows us to specify dependenc
 
 We use `runAfter` to create this execution order:
 
-         / -> generate load
-    build                      / -> deploy
-         \ -> create-experiment 
-                               \ -> wait-completion
+      deploy bookinfo
+    /         generate load
+    \       /
+      build                       deploy new version
+            \                   /  
+              create experiment 
+                                \
+                                  wait for completion/delete
 
 The completed Tekton `Pipeline` is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/pipeline.yaml). It can be applied as:
 
@@ -288,14 +289,24 @@ The completed Tekton `Pipeline` is [here](https://github.ibm.com/kalantar/iter8-
 
 ## Running the Pipeline
 
-### Create `PipelineRun`
+Finally, to execute a Tekton pipeline, we must create a `PipelineRun`. When created, it manages the execution of the pipeline. We can follow the execution of the pipeline:
 
-Finally, to execute a Tekton pipeline, we create a `PipelineRun`. When created, it manages the execution of the pipeline. We can follow the execution of the pipeline by observing the pods that are created. We can follow the execution of iter8 by observing the creation of the experiment:
+    watch kubectl --namespace ${NAMESPACE} get taskrun
+
+We can follow the execution of iter8 by observing the creation of the experiment:
 
     watch kubectl --namespace ${NAMESPACE} experiments.iter8.tools
 
+### Manual Creation
+
 An example `PipelineRun` is captured [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/pipelinerun.yaml). It can be applied as:
 
-    kubectl --namespace ${NAMESPACE} apply --filename 
+### Via webhooks
 
-## Conclusions
+Define a webhook using the Tekton dashboard. Define it in your clone of the reviews project.
+
+Once the webhook is defined, it can be triggered by pushing a change to the github repo.
+
+Modify line 41 of `reviews-application/src/main/java/application/rest/LibertyRestEndpoint.java` by chaging the value of `star_color`.
+
+Pushing this change will automatically create a new `PipelineRun` object which will cause the pipeline to execute.
