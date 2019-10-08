@@ -1,7 +1,7 @@
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
-  name: experiment-stop-claim-bookinfo-iter8
+  name: experiment-stop-claim
 spec:
   storageClassName: default
   accessModes:
