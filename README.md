@@ -45,11 +45,11 @@ Each of these tasks is reviewed in detail below. However, before doing so, some 
 
 ### Required Software
 
-- Istio: https://istio.io/docs/setup/
+- Istio: <https://istio.io/docs/setup/>
 
       istioctl manifest apply --set profile=demo
 
-- iter8: https://github.com/iter8-tools/docs/blob/master/doc_files/iter8_install.md
+- iter8: <https://github.com/iter8-tools/docs/blob/master/doc_files/iter8_install.md>
 
       kubectl apply \
       -f https://raw.githubusercontent.com/iter8-tools/iter8-analytics/master/install/kubernetes/iter8-analytics.yaml \
@@ -60,14 +60,13 @@ Each of these tasks is reviewed in detail below. However, before doing so, some 
       curl -s https://raw.githubusercontent.com/iter8-tools/iter8-controller/master/hack/grafana_install_dashboard.sh \
       | /bin/bash -
 
-- Tekton: https://github.com/tektoncd/pipeline/blob/master/docs/install.md
+- Tekton: <https://github.com/tektoncd/pipeline/blob/master/docs/install.md>
 
       kubectl apply --filename https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
 
 If using webhooks, the following additional items are needed:
-- Tekton Dashboard: https://github.com/tektoncd/dashboard
 
-      
+- Tekton Dashboard: <https://github.com/tektoncd/dashboard>
 
 ### Create Target Namespace
 
@@ -81,7 +80,7 @@ Define a target namespace and enable it for Istio auto-injection:
 
 The [bookinfo application](https://istio.io/docs/examples/bookinfo/), a sample application developed for demonstrating features of Istio can be used to demonstrate the pipeline.
 
-The following project has been created from the source of the *reviews* microservice and can be cloned: https://github.com/kalantar/reviews
+The following project has been created from the source of the *reviews* microservice and can be cloned: <https://github.com/kalantar/reviews>
 
 In the `bookinfo` folder are files that can be used to deploy the bookinfo application. Also a Tekton task has been created that does this.
 
@@ -252,7 +251,7 @@ For the new version we use the short commit id of the repo being built.
 
 The full definition of the Tekton `Task` is [here](https://github.com/kalantar/iter8-tekton/blob/master/tasks/create-experiment.yaml). It can be created as:
 
-   kubectl --namespace ${NAMESPACE} apply --filename https://raw.githubusercontent.com/kalantar/iter8-tekton/master/tasks/create-experiment.yaml
+    kubectl --namespace ${NAMESPACE} apply --filename https://raw.githubusercontent.com/kalantar/iter8-tekton/master/tasks/create-experiment.yaml
 
 ## Task: Deploy New Version
 
