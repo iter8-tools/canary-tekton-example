@@ -20,11 +20,11 @@ spec:
     - name: build-push-step
       env:
       - name: DOCKER_CONFIG
-        value: /builder/home/.docker
-      image: gcr.io/kaniko-project/executor
+        value: /tekton/home/.docker
+      image: gcr.io/kaniko-project/executor:v0.15.0
       command: [ "/kaniko/executor" ]
       args:
-        - --dockerfile=${inputs.params.pathToDockerFile}
-        - --destination=${outputs.resources.docker-image.url}
-        - --context=${inputs.params.pathToContext}
+        - --dockerfile=$(inputs.params.pathToDockerFile)
+        - --destination=$(outputs.resources.docker-image.url)
+        - --context=$(inputs.params.pathToContext)
         - --skip-tls-verify

@@ -44,7 +44,7 @@ spec:
             resource: git-source
       params:
         - name: target-namespace
-          value: "${params.target-namespace}"
+          value: "$(params.target-namespace)"
     - name: build
       taskRef:
         name: build-task
@@ -57,9 +57,9 @@ spec:
             resource: docker-image
       params:
         - name: pathToDockerFile
-          value: ${params.pathToDockerFile}
+          value: $(params.pathToDockerFile)
         - name: pathToContext
-          value: ${params.pathToContext}
+          value: $(params.pathToContext)
     - name: generate-load
       taskRef:
         name: generate-load-task
@@ -70,9 +70,9 @@ spec:
             resource: git-source
       params:
         - name: image-tag
-          value: "${params.image-tag}"
+          value: "$(params.image-tag)"
         - name: target-namespace
-          value: "${params.target-namespace}"
+          value: "$(params.target-namespace)"
     - name: create-experiment
       taskRef:
         name: create-experiment-task
@@ -85,13 +85,13 @@ spec:
             resource: docker-image
       params:
         - name: image-tag
-          value: "${params.image-tag}"
+          value: "$(params.image-tag)"
         - name: experiment
-          value: "${params.experiment}"
+          value: "$(params.experiment)"
         - name: experiment-id
-          value: "${params.image-tag}"
+          value: "$(params.image-tag)"
         - name: target-namespace
-          value: "${params.target-namespace}"
+          value: "$(params.target-namespace)"
     - name: deploy
       taskRef:
         name: deploy-task
@@ -104,9 +104,9 @@ spec:
             resource: docker-image
       params:
         - name: image-tag
-          value: "${params.image-tag}"
+          value: "$(params.image-tag)"
         - name: target-namespace
-          value: "${params.target-namespace}"
+          value: "$(params.target-namespace)"
     - name: wait-completion
       taskRef:
         name: wait-completion-task
@@ -117,8 +117,8 @@ spec:
             resource: git-source
       params:
         - name: experiment-template
-          value: "${params.experiment}"
+          value: "$(params.experiment)"
         - name: experiment-id
-          value: "${params.image-tag}"
+          value: "$(params.image-tag)"
         - name: target-namespace
-          value: "${params.target-namespace}"
+          value: "$(params.target-namespace)"

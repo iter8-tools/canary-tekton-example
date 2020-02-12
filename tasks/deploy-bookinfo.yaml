@@ -22,11 +22,11 @@ spec:
         - '-c'
         - |
           # get target namespace
-          NAMESPACE=${inputs.params.target-namespace}
+          NAMESPACE=$(inputs.params.target-namespace)
           echo "NAMESPACE = ${NAMESPACE}"
 
           # look for HOST in properties file
-          PROPERTY_FILE=/workspace/git-source/${inputs.params.pipeline-properties}
+          PROPERTY_FILE=/workspace/git-source/$(inputs.params.pipeline-properties)
           HOST=$(grep app-host ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//')
           # if set, replace well known environment variables
           echo "Found in properties file app-host = $HOST"

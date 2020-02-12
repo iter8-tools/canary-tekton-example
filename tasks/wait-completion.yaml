@@ -26,11 +26,11 @@ spec:
         - |
           # DURATION
           # SLEEP_TIME
-          EXPERIMENT_TEMPLATE_FILE=/workspace/git-source/${inputs.params.experiment-template}
-          EXPERIMENT_ID=${inputs.params.experiment-id}
+          EXPERIMENT_TEMPLATE_FILE=/workspace/git-source/$(inputs.params.experiment-template)
+          EXPERIMENT_ID=$(inputs.params.experiment-id)
           EXPERIMENT_NAME=$(yq read ${EXPERIMENT_TEMPLATE_FILE} metadata.name)-${EXPERIMENT_ID}
 
-          CLUSTER_NAMESPACE=${inputs.params.target-namespace}
+          CLUSTER_NAMESPACE=$(inputs.params.target-namespace)
           FORCE_TERMINATION=
           IDS_STAGE_NAME="wait-experiment-completion"
           STATUS_FILE="/status/done-${EXPERIMENT_ID}"

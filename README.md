@@ -46,8 +46,23 @@ Each of these tasks is reviewed in detail below. However, before doing so, some 
 ### Required Software
 
 - Istio: https://istio.io/docs/setup/
+
+      istioctl manifest apply --set profile=demo
+
 - iter8: https://github.com/iter8-tools/docs/blob/master/doc_files/iter8_install.md
+
+      kubectl apply \
+      -f https://raw.githubusercontent.com/iter8-tools/iter8-analytics/master/install/kubernetes/iter8-analytics.yaml \
+      -f https://raw.githubusercontent.com/iter8-tools/iter8-controller/master/install/iter8-controller.yaml
+
+      export GRAFANA_URL=<grafana dashboard> 
+      export DASHBOARD_DEFN=https://raw.githubusercontent.com/iter8-tools/iter8-controller/master/config/grafana/istio.json 
+      curl -s https://raw.githubusercontent.com/iter8-tools/iter8-controller/master/hack/grafana_install_dashboard.sh \
+      | /bin/bash -
+
 - Tekton: https://github.com/tektoncd/pipeline/blob/master/docs/install.md
+
+      kubectl apply --filename https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
 
 If using webhooks, the following additional items are needed:
 - Tekton Dashboard: https://github.com/tektoncd/dashboard
@@ -112,7 +127,7 @@ The pipeline tasks create iter8 experiments, reads Istio virtual system and dest
 
 A `ClusterRole` and `ClusterRoleBinding` can be used to define the necessary permissions and to assign it to service account `${SERVICE_ACCOUNT}`
 
-    kubectl apply --namespace --apply -f <<EOF
+    kubectl apply -f - <<EOF
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -156,6 +171,7 @@ Two resources are needed, one for the git project and for the DockerHub image we
 
 You can create the GitHub repo by cloning or forking the [iter8 repo](https://github.com/iter8-tools/bookinfoapp-reviews) The Github resource can be specified as:
 
+    export GH_PROJECT_URL=<github project url>
     kubectl --namespace ${NAMESPACE} apply --filename - <<EOF    
     apiVersion: tekton.dev/v1alpha1
     kind: PipelineResource
@@ -167,11 +183,12 @@ You can create the GitHub repo by cloning or forking the [iter8 repo](https://gi
       - name: revision
         value: master
       - name: url
-        value: https://github.com/<your github org>/bookinfoapp-reviews
+        value: ${GH_PROJECT_URL}
     EOF
 
 The DockerHub image can be specified as:
 
+    export DOCKER_IMAGE=<your docker image>
     kubectl --namespace ${NAMESPACE} apply --filename - <<EOF
     apiVersion: tekton.dev/v1alpha1
     kind: PipelineResource
@@ -181,7 +198,7 @@ The DockerHub image can be specified as:
       type: image
       params:
       - name: url
-        value: index.docker.io/<your docker namespace>/reviews
+        value: index.docker.io/${DOCKER_IMAGE}
     EOF
 
 ### Optional: Create `PersistentVolume` and `PersistentVolumeClaim`
@@ -190,7 +207,8 @@ If using the load generation and wait for completion tasks, a `PersistentVolume`
 
 For simplicity we used a volume of the default storage class. In this example, we rely on dynamic  volume provisioning:
 
-    kubectl --namespace $NAMESPACE --filename - <<EOF    kind: PersistentVolumeClaim
+    kubectl --namespace $NAMESPACE apply --filename - <<EOF    
+    kind: PersistentVolumeClaim
     apiVersion: v1
     metadata:
       name: experiment-stop-claim

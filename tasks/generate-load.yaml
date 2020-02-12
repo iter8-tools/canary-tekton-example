@@ -21,9 +21,9 @@ spec:
       args:
         - '-c'
         - |
-          EXPERIMENT_ID=${inputs.params.image-tag}
-          CLUSTER_NAMESPACE=${inputs.params.target-namespace}
-          PROPERTY_FILE=/workspace/git-source/${inputs.params.pipeline-properties}
+          EXPERIMENT_ID=$(inputs.params.image-tag)
+          CLUSTER_NAMESPACE=$(inputs.params.target-namespace)
+          PROPERTY_FILE=/workspace/git-source/$(inputs.params.pipeline-properties)
 
           # Identify application URL
           HOST=$(grep app-host ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//')

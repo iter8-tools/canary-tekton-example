@@ -27,10 +27,10 @@ spec:
       args:
         - '-c'
         - |
-          IMAGE_TAG=${inputs.params.image-tag}
-          PATCH_FILE=${inputs.params.PATCH_FILE}
-          #PIPELINE_IMAGE_URL=${inputs.resources.docker-image.url}:${inputs.params.image-tag}
-          PIPELINE_IMAGE_URL=${inputs.resources.docker-image.url}
+          IMAGE_TAG=$(inputs.params.image-tag)
+          PATCH_FILE=$(inputs.params.PATCH_FILE)
+          #PIPELINE_IMAGE_URL=$(inputs.resources.docker-image.url):$(inputs.params.image-tag)
+          PIPELINE_IMAGE_URL=$(inputs.resources.docker-image.url)
 
           sed -i -e "s#iter8/reviews:istio-VERSION#${PIPELINE_IMAGE_URL}#" ${PATCH_FILE}
           sed -i -e "s#VERSION#${IMAGE_TAG}#g" ${PATCH_FILE}
@@ -38,12 +38,12 @@ spec:
     - name: generate-deployment
       image: tommeulensteen/kustomize
       command: [ "kustomize" ]
-      args: [ "build", "/workspace/git-source/kustomize", "-o", "${inputs.params.DEPLOYMENT_FILE}" ]
+      args: [ "build", "/workspace/git-source/kustomize", "-o", "$(inputs.params.DEPLOYMENT_FILE)" ]
     - name: log-deployment
       image: alpine
       command: [ "cat" ]
-      args: [ "${inputs.params.DEPLOYMENT_FILE}" ]
+      args: [ "$(inputs.params.DEPLOYMENT_FILE)" ]
     - name: kubectl-apply
       image: lachlanevenson/k8s-kubectl
       command: [ "kubectl" ]
-      args: [ "-n", "${inputs.params.target-namespace}", "apply", "-f", "${inputs.params.DEPLOYMENT_FILE}" ]
+      args: [ "-n", "$(inputs.params.target-namespace)", "apply", "-f", "$(inputs.params.DEPLOYMENT_FILE)" ]
