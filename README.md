@@ -66,8 +66,8 @@ Each of these tasks is reviewed in detail below. However, before doing so, some 
 
 If using webhooks, the following additional items are needed:
 - Tekton Dashboard: https://github.com/tektoncd/dashboard
-- webhooks plugin: https://github.com/tektoncd/experimental/tree/master/webhooks-extension
-- knative (version 0.6.0): see documentation for webhooks plugin
+
+      
 
 ### Create Target Namespace
 
@@ -160,7 +160,7 @@ A `ClusterRole` and `ClusterRoleBinding` can be used to define the necessary per
       namespace: ${NAMESPACE}
     EOF
 
-For convenience, this is defined [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tekton-iter8-role.yaml).
+For convenience, this is defined [here](https://raw.githubusercontent.com/kalantar/iter8-tekton/master/tekton-iter8-role.yaml).
 
 ### Optional: Define PipelineResources
 
@@ -221,7 +221,7 @@ For simplicity we used a volume of the default storage class. In this example, w
           storage: 2Ki
     EOF
 
-For convenience, this is defined [here](https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/volume.yaml?token=AAAKR3NNN9diaelRbgv0mX52DfkMYdmXks5dpiuWwA%3D%3D).
+For convenience, this is defined [here](https://raw.githubusercontent.com/kalantar/iter8-tekton/master/volume.yaml).
 
 ## Pipeline Tasks
 
@@ -233,14 +233,14 @@ The task defines the needed Istio `VirtualService` and `Gateway` resources. By d
 
 The task can be created as:
 
-    kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/tasks/deploy-bookinfo.yaml?token=AAAKR09L-BD0-axwaWobd5_XX90SjzEGks5dpiLiwA%3D%3D
+    kubectl --namespace ${NAMESPACE} apply --filename https://raw.githubusercontent.com/kalantar/iter8-tekton/master/tasks/deploy-bookinfo.yaml
 
 ## Task: Build New Version
 
 We build our image and push it to DockerHub using [Kaniko](https://github.com/GoogleContainerTools/kaniko/).
-Kaniko both builds and pushes the resulting image to DockerHub. The full Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/build.yaml). It can be created as:
+Kaniko both builds and pushes the resulting image to DockerHub. The full Tekton `Task` definition is [here](https://github.com/kalantar/iter8-tekton/blob/master/tasks/build.yaml). It can be created as:
 
-    kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/tasks/build.yaml?token=AAAKR-I2-xCLr0TtF3lkLn4H8Rkf_drbks5dnj_QwA%3D%3D
+    kubectl --namespace ${NAMESPACE} apply --filename https://raw.githubusercontent.com/kalantar/iter8-tekton/master/tasks/build.yaml
 
 ## Task: Create Experiment
 
@@ -250,9 +250,9 @@ The main challenge is to identify the current version. We rely on labels iter8 a
 
 For the new version we use the short commit id of the repo being built.
 
-The full definition of the Tekton `Task` is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/create-experiment.yaml). It can be created as:
+The full definition of the Tekton `Task` is [here](https://github.com/kalantar/iter8-tekton/blob/master/tasks/create-experiment.yaml). It can be created as:
 
-   kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/tasks/create-experiment.yaml?token=AAAKR3tY-Q53wGjNC6UQEwR1BCfVcv77ks5dnkJqwA%3D%3D
+   kubectl --namespace ${NAMESPACE} apply --filename https://raw.githubusercontent.com/kalantar/iter8-tekton/master/tasks/create-experiment.yaml
 
 ## Task: Deploy New Version
 
@@ -264,9 +264,9 @@ The task implements 4 steps:
 3. `log-deployment` - logs the generated deployment yaml
 4. `apply` - applies the deployment yaml via `kubectl`
 
-The full Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/deploy.yaml). It can be created as:
+The full Tekton `Task` definition is [here](https://github.com/kalantar/iter8-tekton/blob/master/tasks/deploy.yaml). It can be created as:
 
-    kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/tasks/deploy.yaml?token=AAAKR25UFk7e3LlnIlkzEC8KYsf-UjrNks5dnkAowA%3D%3D
+    kubectl --namespace ${NAMESPACE} apply --filename https://raw.githubusercontent.com/kalantar/iter8-tekton/master/tasks/deploy.yaml
 
 ## Task: Generate Load
 
@@ -274,17 +274,17 @@ Iter8 can evaluate the success of a new version if there is load against the sys
 
 Once we start load, we face the problem of stopping it when a canary rollout is complete. To accomplish this we add a shared persistent volume between this task and the "wait-completion" task. When the latter identifies a completed rollout, it touches a file on the shared volume. The load-generator watches for this change and terminates the load.
 
-The final Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/generate-load.yaml). It can be created as:
+The final Tekton `Task` definition is [here](https://github.com/kalantar/iter8-tekton/blob/master/tasks/generate-load.yaml). It can be created as:
 
-    kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/tasks/generate-load.yaml?token=AAAKR9oP4ndV3QkLkmOnsQGhkg6c0Tbyks5dnkF3wA%3D%3D
+    kubectl --namespace ${NAMESPACE} apply --filename https://raw.githubusercontent.com/kalantar/iter8-tekton/master/tasks/generate-load.yaml
 
 ## Task: Wait for completion
 
 A task to test for completion monitors progress. When the canary rollout is complete, it identifies (based on the `status` of the `Experiment`) which deployment (the original or the the new) is being used and deletes the other one to save resources. Finally, it touches a shared file to trigger the termination of load.
 
-The Tekton `Task` definition is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/tasks/wait-completion.yaml). It can be created as:
+The Tekton `Task` definition is [here](https://github.com/kalantar/iter8-tekton/blob/master/tasks/wait-completion.yaml). It can be created as:
 
-    kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/tasks/wait-completion.yaml?token=AAAKRwYi55q5g_8sBLRA1qQ5bm-PKAF6ks5dnkG-wA%3D%3D
+    kubectl --namespace ${NAMESPACE} apply --filename https://raw.githubusercontent.com/kalantar/iter8-tekton/master/tasks/wait-completion.yaml
 
 ## Putting it together
 
@@ -301,9 +301,9 @@ We use `runAfter` to create this execution order:
                                 \
                                   wait for completion/delete
 
-The completed Tekton `Pipeline` is [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/pipeline.yaml). It can be applied as:
+The completed Tekton `Pipeline` is [here](https://github.com/kalantar/iter8-tekton/blob/master/pipeline.yaml). It can be applied as:
 
-    kubectl --namespace ${NAMESPACE} apply --filename https://raw.github.ibm.com/kalantar/iter8-tekton-blog/master/pipeline.yaml?token=AAAKR5yjd2QiLDqOs67G-GODmwJ_VTNeks5dnka-wA%3D%3D
+    kubectl --namespace ${NAMESPACE} apply --filename https://raw.githubusercontent.com/kalantar/iter8-tekton/master/pipeline.yaml
 
 ## Running the Pipeline
 
@@ -317,7 +317,7 @@ We can follow the execution of iter8 by observing the creation of the experiment
 
 ### Manual Creation
 
-An example `PipelineRun` is captured [here](https://github.ibm.com/kalantar/iter8-tekton-blog/blob/master/pipelinerun.yaml). It can be applied as:
+An example `PipelineRun` is captured [here](https://github.com/kalantar/iter8-tekton/blob/master/pipelinerun.yaml). It can be applied as:
 
 ### Via webhooks
 
