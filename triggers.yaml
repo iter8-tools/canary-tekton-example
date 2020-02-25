@@ -1,0 +1,105 @@
+apiVersion: tekton.dev/v1alpha1
+kind: TriggerTemplate
+metadata:
+  name: build-canary-deploy-iter8-pipeline-template
+spec:
+  params:
+    - name: gitrevision
+      description: The git revision
+    - name: gitrepositoryurl
+      description: The git repository url
+    - name: webhooks-tekton-git-server
+      description: The server name in the Git url
+    - name: webhooks-tekton-git-org
+      description: The org name in the Git url
+    - name: webhooks-tekton-git-repo
+      description: The repository name in the Git url
+    - name: webhooks-tekton-git-branch
+      description: The branch for the Git repository
+    - name: event-type
+      description: The Git event type
+    - name: webhooks-tekton-docker-registry
+      description: The image registry
+    - name: docker-tag
+      description: The image tag
+    - name: webhooks-tekton-service-account
+      description: The ServiceAccount that the PipelineRun will execute under
+    - name: webhooks-tekton-target-namespace
+      description: The namespace in which to create this TriggerTemplate's resources
+    - name: webhooks-tekton-release-name
+      description: name of project
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1alpha1
+      kind: PipelineRun
+      metadata:
+        name: build-canary-deploy-iter8-pipelinerun-$(uid)
+        namespace: $(params.webhooks-tekton-target-namespace)
+        labels:
+          webhooks.tekton.dev/gitServer: $(params.webhooks-tekton-git-server)
+          webhooks.tekton.dev/gitOrg: $(params.webhooks-tekton-git-org)
+          webhooks.tekton.dev/gitRepo: $(params.webhooks-tekton-git-repo)
+          webhooks.tekton.dev/gitBranch: $(params.webhooks-tekton-git-branch)
+      spec:
+        serviceAccountName: $(params.webhooks-tekton-service-account)
+        pipelineRef:
+          name: build-canary-deploy-iter8-pipeline
+        params:
+          - name: image-tag
+            value: $(params.gitrevision)
+          - name: image-name
+            value: $(params.webhooks-tekton-docker-registry)/$(params.docker-tag)
+          - name: release-name
+            value: $(params.webhooks-tekton-release-name)
+          - name: target-namespace
+            value: $(params.webhooks-tekton-target-namespace)
+          - name: experiment-id
+            value: $(params.gitrevision)
+        resources:
+          - name: git-source
+            resourceSpec:
+              type: git
+              params:
+              - name: revision
+                value: $(params.gitrevision)
+              - name: url
+                value: $(params.gitrepositoryurl)
+          - name: docker-image
+            resourceSpec:
+              type: image
+              params:
+                - name: url
+                  value: $(params.webhooks-tekton-docker-registry)/$(params.docker-tag)
+---
+apiVersion: tekton.dev/v1alpha1
+kind: TriggerBinding
+metadata:
+  name: build-canary-deploy-iter8-pipeline-push-binding
+spec:
+  params:
+    - name: gitrevision
+      value: $(body.head_commit.id)
+    - name: gitrepositoryurl
+      value: $(body.repository.clone_url)
+    - name: docker-tag
+      value: $(body.repository.name):$(body.webhooks-tekton-image-tag)
+    - name: event-type
+      value: $(header.X-Github-Event)
+    - name: webhooks-tekton-git-branch
+      value: $(body.webhooks-tekton-git-branch)
+---
+apiVersion: tekton.dev/v1alpha1
+kind: TriggerBinding
+metadata:
+  name: build-canary-deploy-iter8-pipeline-pullrequest-binding
+spec:
+  params:
+    - name: gitrevision
+      value: $(body.head_commit.id)
+    - name: gitrepositoryurl
+      value: $(body.repository.clone_url)
+    - name: docker-tag
+      value: $(body.repository.name):$(body.webhooks-tekton-image-tag)
+    - name: event-type
+      value: $(header.X-Github-Event)
+    - name: webhooks-tekton-git-branch
+      value: $(body.webhooks-tekton-git-branch)

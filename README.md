@@ -67,6 +67,12 @@ Each of these tasks is reviewed in detail below. However, before doing so, some 
 If using webhooks, the following additional items are needed:
 
 - Tekton Dashboard: <https://github.com/tektoncd/dashboard>
+  
+  Identify a release from the [list of releases](<https://github.com/tektoncd/dashboard/releases>) and install. For example, to install version 0.5.2:
+
+      export TEKTON_DASHBOARD_VERSION=0.5.2
+      kubectl apply \
+      --filename https://github.com/tektoncd/dashboard/releases/download/v${TEKTON_DASHBOARD_VERSION}/tekton-dashboard-release.yaml \
 
 ### Create Target Namespace
 
@@ -80,7 +86,7 @@ Define a target namespace and enable it for Istio auto-injection:
 
 The [bookinfo application](https://istio.io/docs/examples/bookinfo/), a sample application developed for demonstrating features of Istio can be used to demonstrate the pipeline.
 
-The following project has been created from the source of the *reviews* microservice and can be cloned: <https://github.com/kalantar/reviews>
+The following project has been created from the source of the *reviews* microservice and can be cloned: <https://github.com/iter8-tools/bookinfoapp-reviews>
 
 In the `bookinfo` folder are files that can be used to deploy the bookinfo application. Also a Tekton task has been created that does this.
 
@@ -318,9 +324,60 @@ We can follow the execution of iter8 by observing the creation of the experiment
 
 An example `PipelineRun` is captured [here](https://github.com/kalantar/iter8-tekton/blob/master/pipelinerun.yaml). It can be applied as:
 
-### Via webhooks
+### Triggering via Github Webhooks
 
-Define a webhook using the Tekton dashboard. Define it in your clone of the reviews project.
+Tekton triggers can be used in configure a response to github webhooks.  The Tekton dashboard provides some helpers for configuration.
+
+#### Install Tekton Triggers
+
+To install a particular version of [Tekton triggers](https://github.com/tektoncd/triggers), for example, version 0.2.1:
+
+    export TEKTON_TRIGGERS_VERSION=0.2.1
+    kubectl apply --filename https://storage.googleapis.com/tekton-releases/triggers/previous/v${TEKTON_TRIGGERS_VERSION}/release.yaml
+
+For more information see: <https://github.com/tektoncd/triggers/blob/master/docs/install.md>
+
+#### Install Tekton Dashboard Webhooks Extension
+
+To install the [webhooks extension](https://github.com/tektoncd/experimental/tree/master/webhooks-extension):
+
+    kubectl apply --filename https://github.com/tektoncd/dashboard/releases/download/v${TEKTON_DASHBOARD_VERSION}/tekton-webhooks-extension-release.yaml
+
+#### Define `TriggerTemplate` and `TriggerBinding`
+
+When a github webhook is called, an event listener will use a `TriggerTemplate` to create the necessary `PipelineResource` and `PipelineRun` objects that will mange the execution of the pipeline. The `TriggerBinding` provides the necessary mapping from the github webhook payload to the template.
+
+The full definitions are [here](https://github.com/kalantar/iter8-tekton/blob/master/triggers.yaml). It can be created as in the Tekton install namespace:
+
+    kubectl --namespace tekton-pipelines apply --filename https://raw.githubusercontent.com/kalantar/iter8-tekton/master/triggers.yaml
+
+#### Create the Webhook
+
+In the Tekton Dashboard, navigate to the webhooks and select `Add Webhook`. Fill in the required fields and click `Create`. For details on the requirements, see the [getting started guide](https://github.com/tektoncd/experimental/blob/master/webhooks-extension/docs/GettingStarted.md). At present, this may require some fixes after the fact. For:
+
+- [Amazon EKS](https://github.com/tektoncd/experimental/blob/master/webhooks-extension/docs/GettingStarted.md#notes-for-amazon-eks)
+
+- IBM Kubernetes Service (IKS):
+
+  - Identify the external IP address of the ingress that is created:
+
+        kubectl --namespace tekton-pipelines get ingress el-tekton-webhooks-eventlistener -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+
+  - Modify the deployment `webhooks-extension` to update  environment variable `WEBHOOK_CALLBACK_URL` with the IP address:
+
+        kubectl --namespace tekton-pipelines edit deployment webhooks-extension
+
+  - Edit the ingress `el-tekton-webhooks-eventlistener` to change the `host` to match the IP address:
+
+        kubectl --namespace tekton-pipelines edit ingress el-tekton-webhooks-eventlistener
+
+  - Terminate the ingress pod (it must be manually restarted to pick up the changes)
+
+        kubectl --namespace tekton-pipelines get pods --selector=eventlistener=tekton-webhooks-eventlistener --no-headers -o name | xargs -I {} kubectl --namespace tekton-pipelines delete {}
+
+  - Modify the webhook address github
+
+#### Testing the Webhook
 
 Once the webhook is defined, it can be triggered by pushing a change to the github repo.
 
