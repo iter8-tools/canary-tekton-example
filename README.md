@@ -12,7 +12,7 @@ The following considerations were taken into account in the design of the artifa
 
 - **automated triggering** - Ability to integrate with the [webhook capability](https://github.com/tektoncd/experimental/tree/master/webhooks-extension) in [Tekton dashboards](https://github.com/tektoncd/dashboard) to trigger automated execution. This requirement [limits](https://github.com/tektoncd/experimental/blob/master/webhooks-extension/docs/Limitations.md#pipeline-limitations) the number of configurable parameters.
 
-- **flexibility** - Avoid assumptions about the application; the same pipeline should work for multiple applications.
+- **flexibility** - Avoid assumptions about the application. The same pipeline should work for multiple applications.
 
 ## Pipline Overview
 
