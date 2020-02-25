@@ -332,8 +332,11 @@ Tekton triggers can be used in configure a response to github webhooks.  The Tek
 
 To install a particular version of [Tekton triggers](https://github.com/tektoncd/triggers), for example, version 0.2.1:
 
+    export IPADDRESS=<dummy_ip_address>
     export TEKTON_TRIGGERS_VERSION=0.2.1
-    kubectl apply --filename https://storage.googleapis.com/tekton-releases/triggers/previous/v${TEKTON_TRIGGERS_VERSION}/release.yaml
+    curl -L https://github.com/tektoncd/dashboard/releases/download/v${TEKTON_TRIGGERS_VERSION}/tekton-webhooks-extension-release.yaml \
+    | sed -e "s#IPADDRESS#$ip#g" \
+    | kubectl apply -f -
 
 For more information see: <https://github.com/tektoncd/triggers/blob/master/docs/install.md>
 
