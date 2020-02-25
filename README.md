@@ -322,7 +322,7 @@ We can follow the execution of iter8 by observing the creation of the experiment
 
 ### Manual Creation
 
-An example `PipelineRun` is captured [here](https://github.com/kalantar/iter8-tekton/blob/master/pipelinerun.yaml). It can be applied as:
+An example `PipelineRun` is captured [here](https://github.com/kalantar/iter8-tekton/blob/master/pipelinerun.yaml). The details will need to be updated before applying.
 
 ### Triggering via Github Webhooks
 
