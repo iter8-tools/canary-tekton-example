@@ -1,0 +1,65 @@
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: deployrun-task
+spec:
+  inputs:
+    resources:
+      - name: git-source
+        type: git
+    params:
+      - name: gitrevision
+        default: GITREVISION
+      - name: gitrepositoryurl
+        default: GITREPOSITORYURL
+      - name: target-namespace
+        default: default
+      - name: docker-registry
+        default: DOCKERHUB
+      - name: release
+        default: RELEASE
+  steps:
+    - name: start
+      image: kalantar/yq-kubernetes
+      command: [ "/bin/bash" ]
+      args:
+        - '-c'
+        - |
+          NAMESPACE=$(inputs.params.target-namespace)
+          GITREPOSITORYURL=$(inputs.params.gitrepositoryurl)
+          GITREVISION=$(inputs.params.gitrevision)
+          DOCKERREGISTRY=$(inputs.params.docker-registry)
+          RELEASE=$(inputs.prams.release)
+
+          kubectl --namespace ${NAMESPACE} apply --filename - <<EOF
+          apiVersion: tekton.dev/v1alpha1
+          kind: PipelineRun
+          metadata:
+            name: deployrun-${GITREVISION}
+            namespace: ${NAMESPACE}
+          spec:
+            pipelineRef:
+              name: deployrun-pipeline 
+            resources:
+              - name: git-source
+                resourceSpec:
+                  type: git
+                  params:
+                    - name: url
+                      value: ${GITREPOSITORYURL}
+                    - name: revision
+                      value: ${GITREVISION}
+              - name: docker-image
+                resourceSpec:
+                  type: image
+                  params:
+                    - name: url
+                      value: ${DOCKERREGISTRY}/${RELEASE}
+              params:
+                - name: image-tag
+                  value: ${GITREVISION}
+                - name: experiment-id
+                  value: ${GITREVISION}
+                - name: target-namespace
+                  value: ${NAMESPACE}
+          EOF
