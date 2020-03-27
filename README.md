@@ -208,15 +208,15 @@ The DockerHub image can be specified as:
 
 ### Optional: Create `PersistentVolume` and `PersistentVolumeClaim`
 
-If using the load generation and wait for completion tasks, a `PersistentVolume` and `PersistentVolumeClaim` should be created. The volume is mounted by these tasks so that the load generation can be automatically stopped when the rollout is complete.
+If using the load generation and wait for completion tasks, a `PersistentVolume` and `PersistentVolumeClaim` should be created. The volume is mounted by these tasks so that the load generation can be automatically stopped when the rollout is complete. We recommend one per target namespace.
 
-For simplicity we used a volume of the default storage class. In this example, we rely on dynamic  volume provisioning:
+For simplicity we used a volume of the default storage class. In this example, we rely on dynamic volume provisioning:
 
     kubectl --namespace $NAMESPACE apply --filename - <<EOF    
     kind: PersistentVolumeClaim
     apiVersion: v1
     metadata:
-      name: experiment-stop-claim
+      name: experiment-stop-claim-$NAMESPACE
     spec:
       storageClassName: default
       accessModes:
@@ -225,8 +225,6 @@ For simplicity we used a volume of the default storage class. In this example, w
         requests:
           storage: 2Ki
     EOF
-
-For convenience, this is defined [here](https://raw.githubusercontent.com/kalantar/iter8-tekton/master/volume.yaml).
 
 ## Pipeline Tasks
 

@@ -42,4 +42,4 @@ spec:
   volumes:
     - name: status
       persistentVolumeClaim:
-        claimName: experiment-stop-claim
+        claimName: experiment-stop-claim-$(inputs.params.target-namespace)

@@ -7,15 +7,15 @@ spec:
     resources:
       - name: git-source
         type: git
+      - name: docker-image
+        type: image
     params:
       - name: gitrevision
         default: GITREVISION
-      - name: gitrepositoryurl
-        default: GITREPOSITORYURL
       - name: target-namespace
         default: default
       - name: docker-registry
-        default: DOCKERHUB
+        default: DOCKERREGISTRY
       - name: release
         default: RELEASE
   steps:
@@ -26,10 +26,10 @@ spec:
         - '-c'
         - |
           NAMESPACE=$(inputs.params.target-namespace)
-          GITREPOSITORYURL=$(inputs.params.gitrepositoryurl)
+          GITREPOSITORYURL=$(inputs.resources.git-source.url)
           GITREVISION=$(inputs.params.gitrevision)
           DOCKERREGISTRY=$(inputs.params.docker-registry)
-          RELEASE=$(inputs.prams.release)
+          RELEASE=$(inputs.params.release)
 
           kubectl --namespace ${NAMESPACE} apply --filename - <<EOF
           apiVersion: tekton.dev/v1alpha1
@@ -54,12 +54,12 @@ spec:
                   type: image
                   params:
                     - name: url
-                      value: ${DOCKERREGISTRY}/${RELEASE}
-              params:
-                - name: image-tag
-                  value: ${GITREVISION}
-                - name: experiment-id
-                  value: ${GITREVISION}
-                - name: target-namespace
-                  value: ${NAMESPACE}
+                      value: ${DOCKERREGISTRY}
+            params:
+              - name: image-tag
+                value: ${GITREVISION}
+              - name: experiment-id
+                value: ${GITREVISION}
+              - name: target-namespace
+                value: ${NAMESPACE}
           EOF
