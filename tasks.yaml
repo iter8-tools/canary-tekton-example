@@ -172,11 +172,11 @@ spec:
 
         if [ -z "${DEPLOY_SELECTOR}" ]; then
           # No stable DestinationRule found so find the deployment(s) implementing $SERVICE
-          DEPLOY_SELECTOR=$(kubectl --namespace ${NAMESPACE} get svc ${SERVICE} --output json | jq -r '.spec.selector | to_entries[] | "\(.key)=\(.value)"' | paste -sd',' -)
+          DEPLOY_SELECTOR=$(kubectl --namespace ${NAMESPACE} get service ${SERVICE} --output json | jq -r '.spec.selector | to_entries[] | "\(.key)=\(.value)"' | paste -sd',' -)
         fi
         echo "DEPLOY_SELECTOR=$DEPLOY_SELECTOR"
 
-        NUM_DEPLOY=$(kubectl --namespace ${NAMESPACE} get deploy --selector=${DEPLOY_SELECTOR} --output json | jq '.items | length')
+        NUM_DEPLOY=$(kubectl --namespace ${NAMESPACE} get deployment --selector=${DEPLOY_SELECTOR} --output json | jq '.items | length')
         echo " NUM_DEPLOY=${NUM_DEPLOY}"
         BASELINE_DEPLOYMENT_NAME=
         if (( ${NUM_DEPLOY} > 0 )); then
@@ -495,7 +495,10 @@ spec:
       PORT=$(kubectl --namespace $(params.istio-namespace) get service istio-ingressgateway --output jsonpath="{.spec.ports[?(@.port==80)].nodePort}")
       echo "PORT=${PORT}"
       
-      echo -n "http://${IP}:${PORT}/$(params.application-query)" | tee $(results.application-url.path)
+      HOST="${IP}:${PORT}"
+      echo "HOST=$HOST"
+      
+      echo -n "http://${HOST}/$(params.application-query)" | tee $(results.application-url.path)
 ---
 apiVersion: tekton.dev/v1beta1
 kind: Task
@@ -535,7 +538,9 @@ spec:
       # Remove terminatation file if it exists (it should not)
       rm -f $(params.UID)/$(params.terminate) || true
 
-      
+      echo "param HOST=$(params.HOST)"
+      echo "param URL=$(params.URL)"
+
       if [ "$(params.HOST)" == "" ]; then
         HOST=
       elif [ "$(params.HOST)" == "\*" ]; then
@@ -543,7 +548,7 @@ spec:
       else
         HOST=$(params.HOST)
       fi
-      echo "HOST=$HOST"
+      echo "computed HOST=$HOST"
 
       # Optionally use a Host header in requests
       if [ -z ${HOST} ]; then

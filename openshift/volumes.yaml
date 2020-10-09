@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: experiment-storage
+spec:
+  storageClassName: ibmc-file-bronze
+  resources:
+    requests:
+      storage: 16Mi
+  volumeMode: Filesystem
+  accessModes: 
+  - ReadWriteMany
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: source-storage
+spec:
+  storageClassName: ibmc-file-bronze
+  resources:
+    requests:
+      storage: 1Gi
+  volumeMode: Filesystem
+  accessModes: 
+  - ReadWriteMany

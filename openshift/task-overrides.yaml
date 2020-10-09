@@ -1,0 +1,48 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: identify-endpoint-task
+spec:
+  description: |
+    Identify URL of application to be used buy load generator.
+  params:
+  - name: istio-namespace
+    default: istio-system
+    description: Namespace where Istio is installed.
+  - name: application-query
+    default: ""
+    description: Application endpoint.
+  results:
+    - name: application-url
+      description: The URL that can be used to apply load to the application.
+  steps:
+  - name: determine-server
+    image: kalantar/yq-kubernetes
+    script: |
+      #!/usr/bin/env sh
+
+      HOST=$(kubectl --namespace $(params.istio-namespace) get route istio-ingressgateway -o jsonpath='{.spec.host}')
+      echo "HOST=$HOST"
+      
+      echo -n "http://${HOST}/$(params.application-query)" | tee $(results.application-url.path)
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: generate-uid-task
+spec:
+  description: |
+    Generate a UID for pipelinerun.
+  params:
+  results:
+    - name: uid
+      description: The UID.
+  steps:
+  - name: generate-uid
+    image: python:3
+    script: |
+      #!/usr/bin/env bash
+
+      uuid=$(python -c 'import uuid; print(uuid.uuid1())')
+
+      echo -n "${uuid}" | tee $(results.uid.path)

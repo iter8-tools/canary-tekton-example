@@ -17,14 +17,14 @@ spec:
   - name: application-source
     value: https://github.com/kalantar/reviews
   - name: application-namespace
-    value: bookinfo-iter8
+    value: bookinfo-pipeline
   - name: application-image
     value: kalantar/reviews
   - name: application-query
     value: productpage
 
   - name: HOST
-    value: "bookinfo.example.com"
+    value: "istio-ingressgateway-istio-system.kalantar-rh1-76c942296186c1e5a6724002dc1a424f-0000.us-south.containers.appdomain.cloud"
 
   - name: experiment-template
     value: iter8/experiment.yaml

@@ -248,11 +248,15 @@ EOF
 
 We can follow the execution of the pipeline:
 
-    watch tkn taskrun list --namespace ${PIPELINE_NAMESPACE}
+```bash
+watch tkn taskrun list --namespace ${PIPELINE_NAMESPACE}
+```
 
 We can follow the execution of iter8 by observing the creation and progress of the experiment:
 
-    watch kubectl --namespace ${APPLICATION_NAMESPACE} experiments.iter8.tools
+```bash
+watch kubectl --namespace ${APPLICATION_NAMESPACE} experiments.iter8.tools
+```
 
 <!--
 ### Triggering via Github Webhooks

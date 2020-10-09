@@ -1,0 +1,238 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: canary-rollout-iter8
+spec:
+  workspaces:
+  - name: source
+  - name: experiment-dir
+  params:
+  - name: application-source
+    type: string
+    description: URL of source git repository.
+    default: ""
+  - name: application-namespace
+    type: string
+    description: Target namespace for application.
+  - name: application-query
+    type: string
+    description: Service query for load generation.
+    default: ""
+  - name: application-image
+    type: string
+    description: Docker image repository for image to deploy.
+  - name: HOST
+    type: string
+    description: Value that should be sent in Host header in test queries
+    default: ""
+
+  - name: experiment
+    type: string
+    description: Name of experiment to create.
+    default: "experiment"
+  - name: experiment-template
+    type: string
+    description: Template for experiment to create.
+
+  - name: terminate
+    type: string
+    default: ".terminate"
+    description: Name of file that, if present, triggers termination of load generation.
+
+  tasks:
+  - name: generate-uid
+    taskRef:
+      name: generate-uid-task
+
+  - name: clone-source
+    taskRef:
+      name: git-clone
+    workspaces:
+    - name: output
+      workspace: source
+    params:
+    - name: url
+      value: $(params.application-source)
+    - name: revision
+      value: master
+    - name: deleteExisting
+      value: "true"
+    - name: subdirectory
+      value: $(tasks.generate-uid.results.uid)
+
+  - name: build-and-push-image
+    taskRef:
+      name: kaniko
+    runAfter:
+    - clone-source
+    timeout: "15m"
+    workspaces:
+    - name: source
+      workspace: source
+    params:
+    - name: DOCKERFILE
+      value: ./$(tasks.generate-uid.results.uid)/Dockerfile
+    - name: CONTEXT
+      value: ./$(tasks.generate-uid.results.uid)
+    - name: IMAGE
+      value: $(params.application-image):$(tasks.clone-source.results.commit)
+    - name: EXTRA_ARGS
+      value: "--skip-tls-verify"
+
+  - name: identify-baseline
+    taskRef:
+      name: identify-baseline-task
+    runAfter:
+    - clone-source
+    workspaces:
+    - name: source
+      workspace: source
+    params:
+    - name: UID
+      value: $(tasks.generate-uid.results.uid)
+    - name: NAMESPACE
+      value: $(params.application-namespace)
+    - name: EXPERIMENT_TEMPLATE
+      value: $(params.experiment-template)
+
+  - name: define-experiment
+    taskRef:
+      name: define-experiment-task
+    runAfter:
+    - clone-source
+    - identify-baseline
+    workspaces:
+    - name: source
+      workspace: source
+    params:
+    - name: UID
+      value: $(tasks.generate-uid.results.uid)
+    - name: EXPERIMENT_TEMPLATE
+      value: $(params.experiment-template)
+    - name: NAME
+      value: $(tasks.generate-uid.results.uid)
+    - name: BASELINE
+      value: $(tasks.identify-baseline.results.baseline)
+    - name: CANDIDATE
+      value: reviews-$(tasks.clone-source.results.commit)
+
+  - name: create-experiment
+    taskRef:
+      name: apply-manifest-task
+    runAfter:
+    - define-experiment
+    workspaces:
+    - name: manifest-dir
+      workspace: source
+    params:
+    - name: TARGET_NAMESPACE
+      value: $(params.application-namespace)
+    - name: MANIFEST
+      value: $(tasks.define-experiment.results.experiment)
+
+  - name: define-canary
+    taskRef:
+      name: define-canary-task
+    runAfter:
+    - clone-source
+    workspaces:
+    - name: source
+      workspace: source
+    params:
+    - name: UID
+      value: $(tasks.generate-uid.results.uid)
+    - name: image-repository
+      value: $(params.application-image)
+    - name: image-tag
+      value: $(tasks.clone-source.results.commit)
+  
+  - name: deploy-canary
+    taskRef:
+      name: apply-manifest-task
+    runAfter:
+    - create-experiment
+    - build-and-push-image
+    - define-canary
+    workspaces:
+    - name: manifest-dir
+      workspace: source
+    params:
+    - name: TARGET_NAMESPACE
+      value: $(params.application-namespace)
+    - name: MANIFEST
+      value: $(tasks.generate-uid.results.uid)/$(tasks.define-canary.results.deployment-file)
+
+  - name: identify-endpoint
+    taskRef:
+      name: identify-endpoint-task
+    params:
+    - name: application-query
+      value: $(params.application-query)
+
+  - name: generate-load
+    taskRef:
+      name: generate-load-task
+    runAfter:
+    - create-experiment
+    - identify-endpoint
+    workspaces:
+    - name: scratch
+      workspace: experiment-dir
+    params:
+    - name: UID
+      value: $(tasks.generate-uid.results.uid)
+    - name: URL
+      value: $(tasks.identify-endpoint.results.application-url)
+    - name: HOST
+      value: $(params.HOST)
+    - name: terminate
+      value: $(params.terminate)
+
+  - name: wait-completion
+    taskRef:
+      name: wait-completion-task
+    runAfter:
+    - deploy-canary
+    params:
+    - name: EXPERIMENT
+      value: $(tasks.generate-uid.results.uid)
+    - name: NAMESPACE
+      value: $(params.application-namespace)
+
+  - name: stop-load-generation
+    runAfter:
+    - wait-completion
+    taskRef:
+      name: stop-load-task
+    workspaces:
+    - name: scratch
+      workspace: experiment-dir
+    params:
+    - name: UID
+      value: $(tasks.generate-uid.results.uid)
+    - name: terminate
+      value: $(params.terminate)
+  
+  # finally:
+  - name: cleanup-scratch-workspace
+    taskRef:
+      name: cleanup-task
+    runAfter:
+    - stop-load-generation
+    workspaces:
+    - name: workspace
+      workspace: experiment-dir
+    params:
+    - name: UID
+      value: $(tasks.generate-uid.results.uid)
+  - name: cleanup-source-workspace
+    taskRef:
+      name: cleanup-task
+    runAfter:
+    - stop-load-generation
+    workspaces:
+    - name: workspace
+      workspace: source
+    params:
+    - name: UID
+      value: $(tasks.generate-uid.results.uid)
