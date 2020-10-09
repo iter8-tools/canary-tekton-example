@@ -9,20 +9,21 @@ This assumes a basic understanding of [iter8](https://iter8.tools) and [Tekton](
 
 ### Required Software
 
-- Istio: <https://istio.io/docs/setup/>
+**Istio**: <https://istio.io/docs/setup/>
 
       istioctl manifest apply --set profile=demo
 
-- iter8: <https://github.com/iter8-tools/docs/blob/master/doc_files/iter8_install.md>
+**iter8**: <https://github.com/iter8-tools/docs/blob/master/doc_files/iter8_install.md>
 
       kubectl apply \
       -f https://raw.githubusercontent.com/iter8-tools/iter8-analytics/master/install/kubernetes/iter8-analytics.yaml \
       -f https://raw.githubusercontent.com/iter8-tools/iter8-controller/master/install/iter8-controller.yaml
 
-- Tekton: <https://github.com/tektoncd/pipeline/blob/master/docs/install.md>
+**Tekton**: <https://github.com/tektoncd/pipeline/blob/master/docs/install.md>
 
       kubectl apply --filename https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
 
+<!--
 If using webhooks, the following additional items are needed:
 
 - Tekton Dashboard: <https://github.com/tektoncd/dashboard>
@@ -32,6 +33,7 @@ If using webhooks, the following additional items are needed:
       export TEKTON_DASHBOARD_VERSION=0.5.2
       kubectl apply \
       --filename https://github.com/tektoncd/dashboard/releases/download/v${TEKTON_DASHBOARD_VERSION}/tekton-dashboard-release.yaml \
+-->
 
 ### Assumptions
 
@@ -234,11 +236,7 @@ We can follow the execution of iter8 by observing the creation and progress of t
 
     watch kubectl --namespace ${APPLICATION_NAMESPACE} experiments.iter8.tools
 
-
-
-
-
-
+<!--
 ### Triggering via Github Webhooks
 
 Tekton triggers can be used in configure a response to github webhooks.  The Tekton dashboard provides some helpers for configuration.
@@ -302,3 +300,4 @@ Once the webhook is defined, it can be triggered by pushing a change to the gith
 Modify line 41 of `reviews-application/src/main/java/application/rest/LibertyRestEndpoint.java` by chaging the value of `star_color`.
 
 Pushing this change will automatically create a new `PipelineRun` object which will cause the pipeline to execute.
+-->
