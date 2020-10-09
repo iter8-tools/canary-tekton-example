@@ -82,7 +82,7 @@ kubectl create secret generic dockerhub  \
   --type=kubernetes.io/dockerconfigjson
 ```
 
-By default, the Docker configuration is in ~/.docker/config.json. However, if this is just a reference to a credential store, you will need extract the details. For example, by the method described [here](https://github.com/docker/for-mac/issues/4100#issuecomment-648491451).
+By default, the Docker configuration is in ~/.docker/config.json. However, if this is just a reference to a credential store (for example, on a Mac), you will need extract the details. For example, by the method described [here](https://github.com/docker/for-mac/issues/4100#issuecomment-648491451).
 
 For alternatives and additional details about authentication, see the [Tekton Documentation](https://github.com/tektoncd/pipeline/blob/master/docs/auth.md).
 
@@ -144,7 +144,7 @@ On minikube, these can be defined as follows:
 
 ```bash
 kubectl --namespace ${PIPELINE_NAMESPACE} \
-    apply --filename volumes.yaml
+    apply --filename https://raw.githubusercontent.com/kalantar/iter8-tekton/master/volumes.yaml
 ```
 
 ## Define the Pipeline
@@ -157,8 +157,8 @@ It can be defined as follows:
 
 ```bash
 kubectl --namespace ${PIPELINE_NAMESPACE} apply \
-    --filename tasks.yaml \
-    --filename canary-pipeline.yaml
+    --filename https://raw.githubusercontent.com/kalantar/iter8-tekton/master/tasks.yaml \
+    --filename https://raw.githubusercontent.com/kalantar/iter8-tekton/master/canary-pipeline.yaml
 ```
 
 Briefly, the behavior of each task is:
@@ -166,7 +166,7 @@ Briefly, the behavior of each task is:
 - **clone-source** -- clones the GitHub repository with the application to build and deploy
 - **identify-baseline** -- identify the baseline version using heuristic rules
 - **define-experiment** -- define iter8 experiment from template in the source repository
-- **create-exoperiment** -- apply the experiment defined by **define-experiment**
+- **create-experiment** -- apply the experiment defined by **define-experiment**
 - **build-and-push** -- build microservice from source
 - **define-canary** -- define the deployment yaml for the new version using kustomize template in the source repository
 - **deploy-canary** -- deploy the canary version
@@ -174,13 +174,13 @@ Briefly, the behavior of each task is:
 
 Tasks related to load generation for demonstration purposes:
 
-- **generate-uid** -- generate a unique UUID by which to link tasks together
 - **identify-endpoint** -- identify the application endpoint
 - **generate-load** -- generate load
 - **stop-load-generation** -- terminate the load generation
 
-Cleanup tasks (finally tasks):
+Tasks related to cleanup:
 
+- **generate-uid** -- generate a unique UUID by which to link tasks together
 - **cleanup-scratch-workspace** -- delete any intermediate files
 - **cleanup-source-workspace** -- delete source code and any intermediate files
 
@@ -222,6 +222,7 @@ spec:
   - name: experiment-template
     value: iter8/experiment.yaml
 EOF
+```
 
 ### Monitoring Pipeline Execution
 
