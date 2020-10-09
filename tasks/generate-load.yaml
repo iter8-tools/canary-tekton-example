@@ -1,85 +1,146 @@
-apiVersion: tekton.dev/v1alpha1
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: identify-endpoint-task
+spec:
+  description: |
+    Identify URL of application to be used buy load generator.
+  params:
+  - name: istio-namespace
+    default: istio-system
+    description: Namespace where Istio is installed.
+  - name: application-query
+    default: ""
+    description: Application endpoint.
+  results:
+    - name: application-url
+      description: The URL that can be used to apply load to the application.
+  steps:
+  - name: determine-server
+    image: kalantar/yq-kubernetes
+    script: |
+      #!/usr/bin/env sh
+
+      # Determine the IP
+      # Try loadbalancer on istio-ingressgateway
+      IP=$(kubectl --namespace $(params.istio-namespace) get service istio-ingressgateway --output jsonpath='{.status.loadBalancer.ingress[0].ip}')
+      # If not, try an external IP for a node
+      echo "IP=${IP}"
+      if [ -z "${IP}" ]; then
+        IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type == "ExternalIP")].address}')
+      fi
+      echo "IP=${IP}"
+      # If not, try an internal IP for a node (minikube)
+      if [ -z "${IP}" ]; then
+        IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type == "InternalIP")].address}')
+      fi
+      echo "IP=${IP}"
+
+      # Determine the port
+      PORT=$(kubectl --namespace $(params.istio-namespace) get service istio-ingressgateway --output jsonpath="{.spec.ports[?(@.port==80)].nodePort}")
+      echo "PORT=${PORT}"
+      
+      echo -n "http://${IP}:${PORT}/$(params.application-query)" | tee $(results.application-url.path)
+---
+apiVersion: tekton.dev/v1beta1
 kind: Task
 metadata:
   name: generate-load-task
 spec:
-  inputs:
-    resources:
-      - name: git-source
-        type: git
-    params:
-      - name: image-tag
-        default: latest
-      - name: target-namespace
-        default: default
-      - name: pipeline-properties
-        default: iter8/pipeline.prop
+  description: |
+    Generate load by sending queries to URL every INTERVAL seconds.
+    Load generation continues as long as the file terminate is not present.
+  params:
+  - name: UID
+    default: "uid"
+    description: |
+      Unique identifier used to assocaite load with an experiment.
+      Suitable values might be the experiment name of the task/pipeline run name/uid.
+  - name: URL
+    default: "http://localhost:8080"
+    description: URL that should be used to generate load.
+  - name: HOST
+    default: ""
+    description: Value to be added in Host header.
+  - name: terminate
+    default: ".terminate"
+    description: Name of file that, if present, triggers termination of load generation.
+  - name: INTERVAL
+    default: "0.1"
+    description: Interval (s) between generated requests.
+  workspaces:
+  - name: scratch
   steps:
-    - name: generate-load
-      image: kalantar/yq-kubernetes
-      command: [ "/bin/bash" ]
-      args:
-        - '-c'
-        - |
-          EXPERIMENT_ID=$(inputs.params.image-tag)
-          CLUSTER_NAMESPACE=$(inputs.params.target-namespace)
-          PROPERTY_FILE=/workspace/git-source/$(inputs.params.pipeline-properties)
+  - name: generate-load
+    image: kalantar/yq-kubernetes
+    workingDir: $(workspaces.scratch.path)
+    script: |
+      #!/usr/bin/env bash
 
-          # Identify application URL
-          HOST=$(grep app-host ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//')
-          if [[ -n ${HOST} ]]; then
-            HOST=$(echo $HOST | sed "s#\$NAMESPACE#$CLUSTER_NAMESPACE#")
-            echo "HOST = $HOST"
-          fi
-          IP=$(kubectl --namespace istio-system get service istio-ingressgateway --output jsonpath='{.status.loadBalancer.ingress[0].ip}')
-          if [[ -z ${IP} ]]; then
-            IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type == "ExternalIP")].address}')
-          fi
-          TARGET_PORT=$(grep app-port ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//') 
-          TARGET_PORT="${TARGET_PORT:-80}"
-          PORT=$(kubectl --namespace istio-system get service istio-ingressgateway --output jsonpath="{.spec.ports[?(@.targetPort==$TARGET_PORT)].nodePort}")
-          URL_PATH=$(grep app-path ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//')
-          URL="http://${IP}:${PORT}/${URL_PATH}"
-          echo "Application URL = ${URL}"
-          if [[ -z ${HOST} ]]; then
-            echo "curl command: curl -o /dev/null -s -w \"%{http_code}\\n\" ${URL}"
-          else
-            echo "curl command: curl -H \"Host: ${HOST}\" -o /dev/null -s -w \"%{http_code}\\n\" ${URL}"
-          fi
+      # Remove terminatation file if it exists (it should not)
+      rm -f $(params.UID)/$(params.terminate) || true
 
-          # Generate requests until wait-complete-task writes to $STATUS_FILE or timeout
-          DURATION=$(grep load-duration ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//')
-          DURATION="${DURATION:-600}"
-          FREQUENCY=$(grep load-frequency ${PROPERTY_FILE} | cut -d':' -f2 | sed 's/^[[:space:]]//')
-          FREQUENCY="${FREQUENCY:-0.1}"
-          STATUS_FILE="/status/done-${EXPERIMENT_ID}"
-          echo "       HOST=$HOST"
-          echo "   DURATION=$DURATION"
-          echo "  FREQUENCY=$FREQUENCY"
-          echo "STATUS_FILE=$STATUS_FILE"
+      
+      if [ "$(params.HOST)" == "" ]; then
+        HOST=
+      elif [ "$(params.HOST)" == "\*" ]; then
+        HOST=
+      else
+        HOST=$(params.HOST)
+      fi
+      echo "HOST=$HOST"
 
-          COUNT=0
-          startS=$(date +%s)
-          timePassedS=$(( $(date +%s) - $startS ))
-          while [ $timePassedS -lt $DURATION ]; do
-            if [ -f ${STATUS_FILE} ]; then break; fi
-            sleep ${FREQUENCY}
-            OUT=
-            if [[ -z ${HOST} ]]; then
-              OUT=$(curl -o /dev/null -s -w "%{http_code}\n" ${URL})
-            else
-              OUT=$(curl -H "Host: ${HOST}" -o /dev/null -s -w "%{http_code}\n" ${URL})
-            fi
-            if [[ "${OUT}" != "200" ]]; then echo "Not OK: ${OUT}"; fi
-            COUNT=$(( $COUNT + 1 ))
-            timePassedS=$(( $(date +%s) - $startS ))
-          done
-          echo "Sent ${COUNT} queries over ${timePassedS}s"
-          rm ${STATUS_FILE} || true # ignore case when no such file
-      volumeMounts:
-        - name: status
-          mountPath: /status
-  volumes:
-    - name: status
-      persistentVolumeClaim:
-        claimName: experiment-stop-claim-$(inputs.params.target-namespace)
+      # Optionally use a Host header in requests
+      if [ -z ${HOST} ]; then
+        echo "curl -o /dev/null -s -w \"%{http_code}\\n\" $(params.URL)"
+      else
+        echo "curl -H \"Host: ${HOST}\" -o /dev/null -s -w \"%{http_code}\\n\" $(params.URL)"
+      fi
+
+      # Generate load until the file terminate is created.
+      REQUESTS=0
+      ERRORS=0
+      while [ 1 ]; do
+        if [ -f $(params.UID)/$(params.terminate) ]; then
+          echo "Terminating load; ${REQUESTS} requests sent; ${ERRORS} had errors."
+          break
+        fi
+        sleep $(params.INTERVAL)
+        OUT=
+        if [ -z ${HOST} ]; then
+          OUT=$(curl -o /dev/null -s -w "%{http_code}\n" $(params.URL))
+        else
+          OUT=$(curl -H "Host: ${HOST}" -o /dev/null -s -w "%{http_code}\n" $(params.URL))
+        fi
+        if [ "${OUT}" != "200" ]; then ((ERRORS++)); echo "Not OK: ${OUT}"; fi
+        ((REQUESTS++))
+      done
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: stop-load-task
+spec:
+  description: |
+    Trigger the termination of experiment load.
+  params:
+  - name: UID
+    default: "uid"
+    description: |
+      Unique identifier used to assocaite load with an experiment.
+      Suitable values might be the experiment name of the task/pipeline run name/uid.
+  - name: terminate
+    default: ".terminate"
+    description: Name of file that, if present, triggers termination of load generation.
+  workspaces:
+  - name: scratch
+  steps:
+  - name: wait
+    image: alpine
+    workingDir: $(workspaces.scratch.path)
+    script: |
+      #!/usr/bin/env sh
+
+      # To avoid conflicts, use a run specific subdirectory
+      mkdir -p $(params.UID)
+      touch $(params.UID)/$(params.terminate)

@@ -1,65 +1,190 @@
-apiVersion: tekton.dev/v1alpha1
+apiVersion: tekton.dev/v1beta1
 kind: Task
 metadata:
-  name: create-experiment-task
+  name: identify-baseline-task
 spec:
-  inputs:
-    resources:
-      - name: git-source
-        type: git
-      - name: docker-image
-        type: image
-    params:
-      - name: image-tag
-        default: latest
-      - name: experiment
-        description: template for experiment
-        default: iter8/experiment.yaml
-      - name: experiment-id
-        description: guid for experiment
-        default: latest
-      - name: target-namespace
-        description: namespace to which candidate will be deployed
-        default: default
-      - name: kustomize-dir
-        default: kustomize
-      - name: patch-file
-        default: patch.yaml
+  description: |
+    Identify the baseline deployment in a cluster namespace.
+  params:
+    - name: UID
+      type: string
+      default: "uid"
+      description: |
+        Unique identifier used to assocaite load with an experiment.
+        Suitable values might be the experiment name of the task/pipeline run name/uid.
+    - name: NAMESPACE
+      type: string
+      default: default
+      description: The cluster namespace in which to search for the baseline.
+    - name: EXPERIMENT_TEMPLATE
+      type: string
+      default: "experiment"
+      description: Name of template that should be used for the experiment.
+  workspaces:
+  - name: source
+  results:
+    - name: baseline
+      description: Name of the baseline deployment.
   steps:
-    - name: identify-stable
+    - name: update-experiment
+      workingDir: $(workspaces.source.path)/$(params.UID)
       image: kalantar/yq-kubernetes
-      command: [ "/bin/bash" ]
-      args:
-        - '-c'
-        - |
-          IMAGE_TAG=$(inputs.params.image-tag)
-          KUSTOMIZE_DIR=/workspace/git-source/$(inputs.params.kustomize-dir)
-          PATCH_FILE=${KUSTOMIZE_DIR}/$(inputs.params.patch-file)
-          PIPELINE_IMAGE_URL=$(inputs.resources.docker-image.url)
-          echo "PATCH_FILE=$PATCH_FILE"
-          echo "PIPELINE_IMAGE_URL=$PIPELINE_IMAGE_URL"
+      script: |
+        #!/usr/bin/env bash
+        # Uncomment to debug
+        set -x
 
-          # Identify the candidate deployment version by generating deployment yaml
-          sed -i -e "s#iter8/reviews:istio-VERSION#${PIPELINE_IMAGE_URL}#" ${PATCH_FILE}
-          sed -i -e "s#VERSION#${IMAGE_TAG}#g" ${PATCH_FILE}
-          cat ${PATCH_FILE} 
-          kustomize build $KUSTOMIZE_DIR
-          CANDIDATE_DEPLOYMENT_NAME=$(kustomize build $KUSTOMIZE_DIR | yq r - metadata.name)
+        # Identify baseline deployment for an experiment
+        # This is heuristic; prefers to look at stable DestinationRule
+        # But if this isn't defined will select first deployment that satisfies
+        # the service selector (service from Experiment)
 
-          # Identify the baseline deployment by inspecting the target namespace
-          CLUSTER_NAMESPACE=$(inputs.params.target-namespace)
-          EXPERIMENT_TEMPLATE_FILE=/workspace/git-source/$(inputs.params.experiment)
-          source <(curl -sSL "https://raw.githubusercontent.com/iter8-tools/iter8-toolchain-rollout/master/scripts/identify_stable.sh")
-          if [[ -z $BASELINE_DEPLOYMENT_NAME ]]; then BASELINE_DEPLOYMENT_NAME=$CANDIDATE_DEPLOYMENT_NAME; fi
+        NAMESPACE=$(params.NAMESPACE)
+        SERVICE=$(yq read $(params.EXPERIMENT_TEMPLATE) spec.service.name)
+        ROUTER=$(yq read $(params.EXPERIMENT_TEMPLATE) spec.networking.id)
 
-          # Create a version specific experiment name
-          EXPERIMENT_ID=$(inputs.params.image-tag)
-          EXPERIMENT_NAME=$(yq read ${EXPERIMENT_TEMPLATE_FILE} metadata.name)-${EXPERIMENT_ID}
+        if [[ -z ${ROUTER} ]] || [[ "${ROUTER}" == "null" ]]; then
+          ROUTER="${SERVICE}.${NAMESPACE}.svc.cluster.local"
+        fi
 
-          echo "EXPERIMENT_NAME=$EXPERIMENT_NAME"
-          echo "CANDIDATE_DEPLOYMENT_NAME=${CANDIDATE_DEPLOYMENT_NAME}"
-          echo "BASELINE_DEPLOYMENT_NAME=${BASELINE_DEPLOYMENT_NAME}"
+        echo "SERVICE=${SERVICE}"
+        echo " ROUTER=${ROUTER}"
 
-          # Create the experiment resource
-          ON_SUCCESS=candidate
-          source <(curl -sSL "https://raw.githubusercontent.com/iter8-tools/iter8-toolchain-rollout/master/scripts/create_experiment.sh")
+        SUBSET=
+        NUM_VS=$(kubectl --namespace ${NAMESPACE} get vs --selector=iter8-tools/router=${ROUTER} --output json | jq '.items | length')
+        echo "NUM_VS=${NUM_VS}"
+        if (( ${NUM_VS} > 0 )); then
+          SUBSET=$(kubectl --namespace ${NAMESPACE} get vs --selector=iter8-tools/router=${ROUTER} --output json | jq -r '.items[0].spec.http[0].route[] | select(has("weight")) | select(.weight == 100) | .destination.subset')
+          echo "SUBSET=$SUBSET"
+        fi
+
+        DEPLOY_SELECTOR=""
+        if [[ -n ${SUBSET} ]]; then
+          NUM_DR=$(kubectl --namespace ${NAMESPACE} get dr --selector=iter8-tools/router=${ROUTER} --output json | jq '.items | length')
+          echo "NUM_DR=${NUM_DR}"
+          if (( ${NUM_DR} > 0 )); then
+            DEPLOY_SELECTOR=$(kubectl --namespace ${NAMESPACE} get dr --selector=iter8-tools/router=${ROUTER} --output json | jq -r --arg SUBSET "$SUBSET" '.items[0].spec.subsets[] | select(.name == $SUBSET) | .labels | to_entries[] | "\(.key)=\(.value)"' | paste -sd',' -)
+          fi
+        fi
+        echo "DEPLOY_SELECTOR=${DEPLOY_SELECTOR}"
+
+        if [ -z "${DEPLOY_SELECTOR}" ]; then
+          # No stable DestinationRule found so find the deployment(s) implementing $SERVICE
+          DEPLOY_SELECTOR=$(kubectl --namespace ${NAMESPACE} get svc ${SERVICE} --output json | jq -r '.spec.selector | to_entries[] | "\(.key)=\(.value)"' | paste -sd',' -)
+        fi
+        echo "DEPLOY_SELECTOR=$DEPLOY_SELECTOR"
+
+        NUM_DEPLOY=$(kubectl --namespace ${NAMESPACE} get deploy --selector=${DEPLOY_SELECTOR} --output json | jq '.items | length')
+        echo " NUM_DEPLOY=${NUM_DEPLOY}"
+        BASELINE_DEPLOYMENT_NAME=
+        if (( ${NUM_DEPLOY} > 0 )); then
+          BASELINE_DEPLOYMENT_NAME=$(kubectl --namespace ${NAMESPACE} get deployment --selector=${DEPLOY_SELECTOR} --output jsonpath='{.items[0].metadata.name}')
+        fi
+        echo -n "${BASELINE_DEPLOYMENT_NAME}"  | tee $(results.baseline.path)
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: define-experiment-task
+spec:
+  description: |
+    Define an iter8 canary Experiment from a template.
+  workspaces:
+    - name: source
+      description: Consisting of kubernetes manifest templates (ie, the Experiment)
+  params:
+    - name: UID
+      default: "uid"
+      description: |
+        Unique identifier used to assocaite load with an experiment.
+        Suitable values might be the experiment name of the task/pipeline run name/uid.
+    - name: EXPERIMENT_TEMPLATE
+      type: string
+      default: "experiment.yaml"
+      description: An experiment resource that can be modified.
+    - name: NAME
+      type: string
+      default: ""
+      description: The name of the experiment resource to create
+    - name: BASELINE
+      type: string
+      default: ""
+      description: The name of the baseline resource
+    - name: CANDIDATE
+      type: string
+      default: ""
+      description: The name of the candidate (canary) resource
+  results:
+    - name: experiment
+      description: Path to experiment (in workspace )
+  steps:
+    - name: update-experiment
+      image: kalantar/yq-kubernetes
+      workingDir: $(workspaces.source.path)/$(params.UID)
+      script: |
+        #!/usr/bin/env bash
+
+        OUTPUT="experiment-$(params.UID).yaml"
+
+        if [ -f "$(params.EXPERIMENT_TEMPLATE)" ]; then
+          cp "$(params.EXPERIMENT_TEMPLATE)" "${OUTPUT}"
+        else
+          curl -s -o "${OUTPUT}" "$(params.EXPERIMENT_TEMPLATE)"
+        fi
+
+        if [ ! -f "${OUTPUT}" ]; then
+          echo "Can not read template: $(params.EXPERIMENT_TEMPLATE)"
+          exit 1
+        fi
+
+        # Update experiment template
+        if [ "" != "$(params.NAME)" ]; then
+          yq write --inplace "${OUTPUT}" metadata.name "$(params.NAME)"
+        fi
+        if [ "" != "$(params.BASELINE)" ]; then
+          yq write --inplace "${OUTPUT}" spec.service.baseline "$(params.BASELINE)"
+        fi
+        if [ "" != "$(params.CANDIDATE)" ]; then
+          yq write --inplace "${OUTPUT}" spec.service.candidates[0] "$(params.CANDIDATE)"
+        fi
+
+        cat "${OUTPUT}"
+        echo -n $(params.UID)/${OUTPUT} | tee $(results.experiment.path)
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: apply-manifest-task
+spec:
+  description: |
+    Create an iter8 canary Experiment from a template.
+  workspaces:
+    - name: manifest-dir
+      description: Consisting of kubernetes manifests (ie, the Experiment)
+    - name: kubeconfig-dir
+      description: Can be used in case kubeconfig file is mounted
+  params:
+    - name: MANIFEST
+      type: string
+      default: "manifest.yaml"
+      description: The name of the file containing the kubernetes manifest to apply
+    - name: TARGET_NAMESPACE
+      type: string
+      default: "default"
+      description: The namespace in which the manifest should be applied
+  steps:
+    - name: apply-manifest
+      image: kalantar/yq-kubernetes
+      workingDir: $(workspaces.manifest-dir.path)
+      script: |
+        #!/usr/bin/env bash
+
+        ls -l
+        pwd
+
+        if [[ -f $(workspaces.kubeconfig-dir.path)/kubeconfig ]]; then
+          export KUBECONFIG=$(workspaces.kubeconfig-dir.path)/kubeconfig
+        fi
+
+        # Create experiment in cluster
+        kubectl --namespace $(params.TARGET_NAMESPACE) apply --filename "$(params.MANIFEST)"

@@ -1,0 +1,22 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: deploy-iter8-task
+spec:
+  description: |
+    Deploy iter8.
+    For details about iter8, see https://iter8.tools
+    TODO allow specifying various parameters.
+  params:
+  - name: VERSION
+    type: string
+    default: v1.0.0-rc3
+    description: The version of iter8 to install
+  steps:
+  - name: deploy-iter8
+    image: kalantar/yq-kubernetes
+    script: |
+      #!/usr/bin/env bash
+
+      curl -L -s https://raw.githubusercontent.com/iter8-tools/iter8/$(params.VERSION)/install/install.sh \
+      | /bin/bash -

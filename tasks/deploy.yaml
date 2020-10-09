@@ -1,49 +1,57 @@
-apiVersion: tekton.dev/v1alpha1
+apiVersion: tekton.dev/v1beta1
 kind: Task
 metadata:
-  name: deploy-task
+  name: define-canary-task
 spec:
-  inputs:
-    resources:
-      - name: git-source
-        type: git
-      - name: docker-image
-        type: image
-    params:
-      - name: image-tag
-        description: tag of image to deploy
-        default: latest
-      - name: target-namespace
-        description: target namespace for deployment
-        default: default
-      - name: PATCH_FILE
-        default: /workspace/git-source/kustomize/patch.yaml
-      - name: DEPLOYMENT_FILE
-        default: /workspace/deploy.yaml
-  steps:
-    - name: modify-patch
-      image: alpine
-      command: [ "/bin/sh" ]
-      args:
-        - '-c'
-        - |
-          IMAGE_TAG=$(inputs.params.image-tag)
-          PATCH_FILE=$(inputs.params.PATCH_FILE)
-          #PIPELINE_IMAGE_URL=$(inputs.resources.docker-image.url):$(inputs.params.image-tag)
-          PIPELINE_IMAGE_URL=$(inputs.resources.docker-image.url)
+  description: |
+    Create YAML file needed to deploy the canary version of the application.
+    Relies on kustomize and assumes a patch file template (PATCH_FILE) containing the keyword
+    "VERSION" that can be replaced with the canary verion.
+  params:
+  - name: UID
+    default: "uid"
+    description: |
+      Unique identifier used to assocaite load with an experiment.
+      Suitable values might be the experiment name of the task/pipeline run name/uid.
+  - name: image-repository
+    description: Docker image repository
+    default: ""
+  - name: image-tag
+    description: tag of image to deploy
+    default: latest
+  - name: PATCH_FILE
+    default: kustomize/patch.yaml
+  workspaces:
+  - name: source
+  results:
+    - name: deployment-file
+      description: Path to file (in workspace )
 
-          sed -i -e "s#iter8/reviews:istio-VERSION#${PIPELINE_IMAGE_URL}#" ${PATCH_FILE}
-          sed -i -e "s#VERSION#${IMAGE_TAG}#g" ${PATCH_FILE}
-          cat ${PATCH_FILE}
-    - name: generate-deployment
-      image: tommeulensteen/kustomize
-      command: [ "kustomize" ]
-      args: [ "build", "/workspace/git-source/kustomize", "-o", "$(inputs.params.DEPLOYMENT_FILE)" ]
-    - name: log-deployment
-      image: alpine
-      command: [ "cat" ]
-      args: [ "$(inputs.params.DEPLOYMENT_FILE)" ]
-    - name: kubectl-apply
-      image: lachlanevenson/k8s-kubectl
-      command: [ "kubectl" ]
-      args: [ "-n", "$(inputs.params.target-namespace)", "apply", "-f", "$(inputs.params.DEPLOYMENT_FILE)" ]
+  steps:
+  - name: modify-patch
+    image: alpine
+    workingDir: $(workspaces.source.path)/$(params.UID)
+    script: |
+      #!/usr/bin/env sh
+
+      IMAGE_TAG=$(params.image-tag)
+      PATCH_FILE=$(params.PATCH_FILE)
+      IMAGE=$(params.image-repository):$(params.image-tag)
+
+      sed -i -e "s#iter8/reviews:istio-VERSION#${IMAGE}#" ${PATCH_FILE}
+      sed -i -e "s#VERSION#${IMAGE_TAG}#g" ${PATCH_FILE}
+      cat ${PATCH_FILE}
+
+      echo -n "deploy-$(params.UID).yaml" | tee $(results.deployment-file.path)
+
+  - name: generate-deployment
+    image: smartive/kustomize
+    workingDir: $(workspaces.source.path)/$(params.UID)
+    command: [ "kustomize" ]
+    args: [ "build", "kustomize", "-o", "deploy-$(params.UID).yaml" ]
+
+  - name: log-deployment
+    image: alpine
+    workingDir: $(workspaces.source.path)/$(params.UID)
+    command: [ "cat" ]
+    args: [ "deploy-$(params.UID).yaml" ]

@@ -1,0 +1,22 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: deploy-istio-task
+spec:
+  description: |
+    Deploy Istio.
+    For details about Istio, see https://istio.io
+  params:
+  - name: version
+    type: string
+    description: The version of Istio to install
+    default: 1.7.2
+  steps:
+  - name: deploy-istio
+    image: kalantar/yq-kubernetes
+    script: |
+      #!/usr/bin/env bash
+
+      export ISTIO_VERSION=$(params.version)
+      curl -L -s https://raw.githubusercontent.com/iter8-tools/iter8/master/test/e2e/install-istio.sh \
+      | /bin/bash -

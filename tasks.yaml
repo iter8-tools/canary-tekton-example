@@ -1,0 +1,601 @@
+# From https://github.com/tektoncd/catalog/tree/v1beta1/git
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: git-clone
+spec:
+  workspaces:
+    - name: output
+      description: The git repo will be cloned onto the volume backing this workspace
+  params:
+    - name: url
+      description: git url to clone
+      type: string
+    - name: revision
+      description: git revision to checkout (branch, tag, sha, ref…)
+      type: string
+      default: master
+    - name: refspec
+      description: (optional) git refspec to fetch before checking out revision
+      default: ""
+    - name: submodules
+      description: defines if the resource should initialize and fetch the submodules
+      type: string
+      default: "true"
+    - name: depth
+      description: performs a shallow clone where only the most recent commit(s) will be fetched
+      type: string
+      default: "1"
+    - name: sslVerify
+      description: defines if http.sslVerify should be set to true or false in the global git config
+      type: string
+      default: "true"
+    - name: subdirectory
+      description: subdirectory inside the "output" workspace to clone the git repo into
+      type: string
+      default: ""
+    - name: deleteExisting
+      description: clean out the contents of the repo's destination directory (if it already exists) before trying to clone the repo there
+      type: string
+      default: "false"
+    - name: httpProxy
+      description: git HTTP proxy server for non-SSL requests
+      type: string
+      default: ""
+    - name: httpsProxy
+      description: git HTTPS proxy server for SSL requests
+      type: string
+      default: ""
+    - name: noProxy
+      description: git no proxy - opt out of proxying HTTP/HTTPS requests
+      type: string
+      default: ""
+  results:
+    - name: commit
+      description: The precise commit SHA that was fetched by this Task
+  steps:
+    - name: clone
+      image: gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/git-init:v0.12.1
+      script: |
+        CHECKOUT_DIR="$(workspaces.output.path)/$(params.subdirectory)"
+
+        cleandir() {
+          # Delete any existing contents of the repo directory if it exists.
+          #
+          # We don't just "rm -rf $CHECKOUT_DIR" because $CHECKOUT_DIR might be "/"
+          # or the root of a mounted volume.
+          if [[ -d "$CHECKOUT_DIR" ]] ; then
+            # Delete non-hidden files and directories
+            rm -rf "$CHECKOUT_DIR"/*
+            # Delete files and directories starting with . but excluding ..
+            rm -rf "$CHECKOUT_DIR"/.[!.]*
+            # Delete files and directories starting with .. plus any other character
+            rm -rf "$CHECKOUT_DIR"/..?*
+          fi
+        }
+
+        if [[ "$(params.deleteExisting)" == "true" ]] ; then
+          cleandir
+        fi
+
+        test -z "$(params.httpProxy)" || export HTTP_PROXY=$(params.httpProxy)
+        test -z "$(params.httpsProxy)" || export HTTPS_PROXY=$(params.httpsProxy)
+        test -z "$(params.noProxy)" || export NO_PROXY=$(params.noProxy)
+
+        /ko-app/git-init \
+          -url "$(params.url)" \
+          -revision "$(params.revision)" \
+          -refspec "$(params.refspec)" \
+          -path "$CHECKOUT_DIR" \
+          -sslVerify="$(params.sslVerify)" \
+          -submodules="$(params.submodules)" \
+          -depth "$(params.depth)"
+        cd "$CHECKOUT_DIR"
+        RESULT_SHA="$(git rev-parse HEAD | tr -d '\n')"
+        EXIT_CODE="$?"
+        if [ "$EXIT_CODE" != 0 ]
+        then
+          exit $EXIT_CODE
+        fi
+        # Make sure we don't add a trailing newline to the result!
+        echo -n "$RESULT_SHA" > $(results.commit.path)
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: identify-baseline-task
+spec:
+  description: |
+    Identify the baseline deployment in a cluster namespace.
+  params:
+    - name: UID
+      type: string
+      default: "uid"
+      description: |
+        Unique identifier used to assocaite load with an experiment.
+        Suitable values might be the experiment name of the task/pipeline run name/uid.
+    - name: NAMESPACE
+      type: string
+      default: default
+      description: The cluster namespace in which to search for the baseline.
+    - name: EXPERIMENT_TEMPLATE
+      type: string
+      default: "experiment"
+      description: Name of template that should be used for the experiment.
+  workspaces:
+  - name: source
+  results:
+    - name: baseline
+      description: Name of the baseline deployment.
+  steps:
+    - name: update-experiment
+      workingDir: $(workspaces.source.path)/$(params.UID)
+      image: kalantar/yq-kubernetes
+      script: |
+        #!/usr/bin/env bash
+        # Uncomment to debug
+        set -x
+
+        # Identify baseline deployment for an experiment
+        # This is heuristic; prefers to look at stable DestinationRule
+        # But if this isn't defined will select first deployment that satisfies
+        # the service selector (service from Experiment)
+
+        NAMESPACE=$(params.NAMESPACE)
+        SERVICE=$(yq read $(params.EXPERIMENT_TEMPLATE) spec.service.name)
+        ROUTER=$(yq read $(params.EXPERIMENT_TEMPLATE) spec.networking.id)
+
+        if [[ -z ${ROUTER} ]] || [[ "${ROUTER}" == "null" ]]; then
+          ROUTER="${SERVICE}.${NAMESPACE}.svc.cluster.local"
+        fi
+
+        echo "SERVICE=${SERVICE}"
+        echo " ROUTER=${ROUTER}"
+
+        SUBSET=
+        NUM_VS=$(kubectl --namespace ${NAMESPACE} get vs --selector=iter8-tools/router=${ROUTER} --output json | jq '.items | length')
+        echo "NUM_VS=${NUM_VS}"
+        if (( ${NUM_VS} > 0 )); then
+          SUBSET=$(kubectl --namespace ${NAMESPACE} get vs --selector=iter8-tools/router=${ROUTER} --output json | jq -r '.items[0].spec.http[0].route[] | select(has("weight")) | select(.weight == 100) | .destination.subset')
+          echo "SUBSET=$SUBSET"
+        fi
+
+        DEPLOY_SELECTOR=""
+        if [[ -n ${SUBSET} ]]; then
+          NUM_DR=$(kubectl --namespace ${NAMESPACE} get dr --selector=iter8-tools/router=${ROUTER} --output json | jq '.items | length')
+          echo "NUM_DR=${NUM_DR}"
+          if (( ${NUM_DR} > 0 )); then
+            DEPLOY_SELECTOR=$(kubectl --namespace ${NAMESPACE} get dr --selector=iter8-tools/router=${ROUTER} --output json | jq -r --arg SUBSET "$SUBSET" '.items[0].spec.subsets[] | select(.name == $SUBSET) | .labels | to_entries[] | "\(.key)=\(.value)"' | paste -sd',' -)
+          fi
+        fi
+        echo "DEPLOY_SELECTOR=${DEPLOY_SELECTOR}"
+
+        if [ -z "${DEPLOY_SELECTOR}" ]; then
+          # No stable DestinationRule found so find the deployment(s) implementing $SERVICE
+          DEPLOY_SELECTOR=$(kubectl --namespace ${NAMESPACE} get svc ${SERVICE} --output json | jq -r '.spec.selector | to_entries[] | "\(.key)=\(.value)"' | paste -sd',' -)
+        fi
+        echo "DEPLOY_SELECTOR=$DEPLOY_SELECTOR"
+
+        NUM_DEPLOY=$(kubectl --namespace ${NAMESPACE} get deploy --selector=${DEPLOY_SELECTOR} --output json | jq '.items | length')
+        echo " NUM_DEPLOY=${NUM_DEPLOY}"
+        BASELINE_DEPLOYMENT_NAME=
+        if (( ${NUM_DEPLOY} > 0 )); then
+          BASELINE_DEPLOYMENT_NAME=$(kubectl --namespace ${NAMESPACE} get deployment --selector=${DEPLOY_SELECTOR} --output jsonpath='{.items[0].metadata.name}')
+        fi
+        echo -n "${BASELINE_DEPLOYMENT_NAME}"  | tee $(results.baseline.path)
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: define-experiment-task
+spec:
+  description: |
+    Define an iter8 canary Experiment from a template.
+  workspaces:
+    - name: source
+      description: Consisting of kubernetes manifest templates (ie, the Experiment)
+  params:
+    - name: UID
+      default: "uid"
+      description: |
+        Unique identifier used to assocaite load with an experiment.
+        Suitable values might be the experiment name of the task/pipeline run name/uid.
+    - name: EXPERIMENT_TEMPLATE
+      type: string
+      default: "experiment.yaml"
+      description: An experiment resource that can be modified.
+    - name: NAME
+      type: string
+      default: ""
+      description: The name of the experiment resource to create
+    - name: BASELINE
+      type: string
+      default: ""
+      description: The name of the baseline resource
+    - name: CANDIDATE
+      type: string
+      default: ""
+      description: The name of the candidate (canary) resource
+  results:
+    - name: experiment
+      description: Path to experiment (in workspace )
+  steps:
+    - name: update-experiment
+      image: kalantar/yq-kubernetes
+      workingDir: $(workspaces.source.path)/$(params.UID)
+      script: |
+        #!/usr/bin/env bash
+
+        OUTPUT="experiment-$(params.UID).yaml"
+
+        if [ -f "$(params.EXPERIMENT_TEMPLATE)" ]; then
+          cp "$(params.EXPERIMENT_TEMPLATE)" "${OUTPUT}"
+        else
+          curl -s -o "${OUTPUT}" "$(params.EXPERIMENT_TEMPLATE)"
+        fi
+
+        if [ ! -f "${OUTPUT}" ]; then
+          echo "Can not read template: $(params.EXPERIMENT_TEMPLATE)"
+          exit 1
+        fi
+
+        # Update experiment template
+        if [ "" != "$(params.NAME)" ]; then
+          yq write --inplace "${OUTPUT}" metadata.name "$(params.NAME)"
+        fi
+        if [ "" != "$(params.BASELINE)" ]; then
+          yq write --inplace "${OUTPUT}" spec.service.baseline "$(params.BASELINE)"
+        fi
+        if [ "" != "$(params.CANDIDATE)" ]; then
+          yq write --inplace "${OUTPUT}" spec.service.candidates[0] "$(params.CANDIDATE)"
+        fi
+
+        cat "${OUTPUT}"
+        echo -n $(params.UID)/${OUTPUT} | tee $(results.experiment.path)
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: apply-manifest-task
+spec:
+  description: |
+    Create an iter8 canary Experiment from a template.
+  workspaces:
+    - name: manifest-dir
+      description: Consisting of kubernetes manifests (ie, the Experiment)
+  params:
+    - name: MANIFEST
+      type: string
+      default: "manifest.yaml"
+      description: The name of the file containing the kubernetes manifest to apply
+    - name: TARGET_NAMESPACE
+      type: string
+      default: "default"
+      description: The namespace in which the manifest should be applied
+  steps:
+    - name: apply-manifest
+      image: kalantar/yq-kubernetes
+      workingDir: $(workspaces.manifest-dir.path)
+      script: |
+        #!/usr/bin/env bash
+
+        # Create experiment in cluster
+        kubectl --namespace $(params.TARGET_NAMESPACE) apply --filename "$(params.MANIFEST)"
+---
+# https://github.com/tektoncd/catalog/tree/v1beta1/kaniko
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: kaniko
+spec:
+  params:
+  - name: IMAGE
+    description: Name (reference) of the image to build.
+  - name: DOCKERFILE
+    description: Path to the Dockerfile to build.
+    default: ./Dockerfile
+  - name: CONTEXT
+    description: The build context used by Kaniko.
+    default: ./
+  - name: EXTRA_ARGS
+    default: ""
+  - name: BUILDER_IMAGE
+    description: The image on which builds will run
+    default: gcr.io/kaniko-project/executor:latest
+  workspaces:
+  - name: source
+  results:
+  - name: IMAGE-DIGEST
+    description: Digest of the image just built.
+
+  steps:
+  - name: build-and-push
+    workingDir: $(workspaces.source.path)
+    image: $(params.BUILDER_IMAGE)
+    # specifying DOCKER_CONFIG is required to allow kaniko to detect docker credential
+    # https://github.com/tektoncd/pipeline/pull/706
+    env:
+    - name: DOCKER_CONFIG
+      value: /tekton/home/.docker
+    command:
+    - /kaniko/executor
+    - $(params.EXTRA_ARGS)
+    - --dockerfile=$(params.DOCKERFILE)
+    - --context=$(workspaces.source.path)/$(params.CONTEXT)  # The user does not need to care the workspace and the source.
+    - --destination=$(params.IMAGE)
+    - --oci-layout-path=$(workspaces.source.path)/$(params.CONTEXT)/image-digest
+    # kaniko assumes it is running as root, which means this example fails on platforms
+    # that default to run containers as random uid (like OpenShift). Adding this securityContext
+    # makes it explicit that it needs to run as root.
+    securityContext:
+      runAsUser: 0
+  - name: write-digest
+    workingDir: $(workspaces.source.path)
+    image: gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/imagedigestexporter:v0.11.1
+    # output of imagedigestexport [{"key":"digest","value":"sha256:eed29..660","resourceRef":{"name":"myrepo/myimage"}}]
+    command: ["/ko-app/imagedigestexporter"]
+    args:
+    - -images=[{"name":"$(params.IMAGE)","type":"image","url":"$(params.IMAGE)","digest":"","OutputImageDir":"$(workspaces.source.path)/$(params.CONTEXT)/image-digest"}]
+    - -terminationMessagePath=$(params.CONTEXT)/image-digested
+  - name: digest-to-results
+    workingDir: $(workspaces.source.path)
+    image: stedolan/jq
+    script: |
+      cat $(params.CONTEXT)/image-digested | jq '.[0].value' -rj | tee /tekton/results/IMAGE-DIGEST
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: define-canary-task
+spec:
+  description: |
+    Create YAML file needed to deploy the canary version of the application.
+    Relies on kustomize and assumes a patch file template (PATCH_FILE) containing the keyword
+    "VERSION" that can be replaced with the canary verion.
+  params:
+  - name: UID
+    default: "uid"
+    description: |
+      Unique identifier used to assocaite load with an experiment.
+      Suitable values might be the experiment name of the task/pipeline run name/uid.
+  - name: image-repository
+    description: Docker image repository
+    default: ""
+  - name: image-tag
+    description: tag of image to deploy
+    default: latest
+  - name: PATCH_FILE
+    default: kustomize/patch.yaml
+  workspaces:
+  - name: source
+  results:
+    - name: deployment-file
+      description: Path to file (in workspace )
+
+  steps:
+  - name: modify-patch
+    image: alpine
+    workingDir: $(workspaces.source.path)/$(params.UID)
+    script: |
+      #!/usr/bin/env sh
+
+      IMAGE_TAG=$(params.image-tag)
+      PATCH_FILE=$(params.PATCH_FILE)
+      IMAGE=$(params.image-repository):$(params.image-tag)
+
+      sed -i -e "s#iter8/reviews:istio-VERSION#${IMAGE}#" ${PATCH_FILE}
+      sed -i -e "s#VERSION#${IMAGE_TAG}#g" ${PATCH_FILE}
+      cat ${PATCH_FILE}
+
+      echo -n "deploy-$(params.UID).yaml" | tee $(results.deployment-file.path)
+
+  - name: generate-deployment
+    image: smartive/kustomize
+    workingDir: $(workspaces.source.path)/$(params.UID)
+    command: [ "kustomize" ]
+    args: [ "build", "kustomize", "-o", "deploy-$(params.UID).yaml" ]
+
+  - name: log-deployment
+    image: alpine
+    workingDir: $(workspaces.source.path)/$(params.UID)
+    command: [ "cat" ]
+    args: [ "deploy-$(params.UID).yaml" ]
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: wait-completion-task
+spec:
+  description: |
+    Wait until EXPERIMENT is completed;
+    that is, condition ExperimentCompleted is true.
+  params:
+  - name: EXPERIMENT
+    default: "experiment"
+    description: Name of iter8 experiment
+  - name: NAMESPACE
+    default: default
+    description: Namespace in which the iter8 experiment is defined.
+  - name: TIMEOUT
+    default: "1h"
+    description: Amount of time to wait for experiment to complete.
+  steps:
+  - name: wait
+    image: kalantar/yq-kubectl
+    script: |
+      #!/usr/bin/env sh
+      set -x
+
+      kubectl --namespace $(params.NAMESPACE) wait \
+        --for=condition=ExperimentCompleted \
+        experiments.iter8.tools $(params.EXPERIMENT) \
+        --timeout=$(params.TIMEOUT)
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: cleanup-task
+spec:
+  workspaces:
+  - name: workspace
+  params:
+  - name: UID
+    default: "uid"
+    description: |
+      Unique identifier used to assocaite load with an experiment.
+      Suitable values might be the experiment name of the task/pipeline run name/uid.
+  steps:
+  - name: clean-workspace
+    image: alpine
+    script: |
+      #!/usr/bin/env sh
+      set -x
+
+      rm -rf $(workspaces.workspace.path)/$(params.UID)
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: identify-endpoint-task
+spec:
+  description: |
+    Identify URL of application to be used buy load generator.
+  params:
+  - name: istio-namespace
+    default: istio-system
+    description: Namespace where Istio is installed.
+  - name: application-query
+    default: ""
+    description: Application endpoint.
+  results:
+    - name: application-url
+      description: The URL that can be used to apply load to the application.
+  steps:
+  - name: determine-server
+    image: kalantar/yq-kubernetes
+    script: |
+      #!/usr/bin/env sh
+
+      # Determine the IP
+      # Try loadbalancer on istio-ingressgateway
+      IP=$(kubectl --namespace $(params.istio-namespace) get service istio-ingressgateway --output jsonpath='{.status.loadBalancer.ingress[0].ip}')
+      # If not, try an external IP for a node
+      echo "IP=${IP}"
+      if [ -z "${IP}" ]; then
+        IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type == "ExternalIP")].address}')
+      fi
+      echo "IP=${IP}"
+      # If not, try an internal IP for a node (minikube)
+      if [ -z "${IP}" ]; then
+        IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type == "InternalIP")].address}')
+      fi
+      echo "IP=${IP}"
+
+      # Determine the port
+      PORT=$(kubectl --namespace $(params.istio-namespace) get service istio-ingressgateway --output jsonpath="{.spec.ports[?(@.port==80)].nodePort}")
+      echo "PORT=${PORT}"
+      
+      echo -n "http://${IP}:${PORT}/$(params.application-query)" | tee $(results.application-url.path)
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: generate-load-task
+spec:
+  description: |
+    Generate load by sending queries to URL every INTERVAL seconds.
+    Load generation continues as long as the file terminate is not present.
+  params:
+  - name: UID
+    default: "uid"
+    description: |
+      Unique identifier used to assocaite load with an experiment.
+      Suitable values might be the experiment name of the task/pipeline run name/uid.
+  - name: URL
+    default: "http://localhost:8080"
+    description: URL that should be used to generate load.
+  - name: HOST
+    default: ""
+    description: Value to be added in Host header.
+  - name: terminate
+    default: ".terminate"
+    description: Name of file that, if present, triggers termination of load generation.
+  - name: INTERVAL
+    default: "0.1"
+    description: Interval (s) between generated requests.
+  workspaces:
+  - name: scratch
+  steps:
+  - name: generate-load
+    image: kalantar/yq-kubernetes
+    workingDir: $(workspaces.scratch.path)
+    script: |
+      #!/usr/bin/env bash
+
+      # Remove terminatation file if it exists (it should not)
+      rm -f $(params.UID)/$(params.terminate) || true
+
+      
+      if [ "$(params.HOST)" == "" ]; then
+        HOST=
+      elif [ "$(params.HOST)" == "\*" ]; then
+        HOST=
+      else
+        HOST=$(params.HOST)
+      fi
+      echo "HOST=$HOST"
+
+      # Optionally use a Host header in requests
+      if [ -z ${HOST} ]; then
+        echo "curl -o /dev/null -s -w \"%{http_code}\\n\" $(params.URL)"
+      else
+        echo "curl -H \"Host: ${HOST}\" -o /dev/null -s -w \"%{http_code}\\n\" $(params.URL)"
+      fi
+
+      # Generate load until the file terminate is created.
+      REQUESTS=0
+      ERRORS=0
+      while [ 1 ]; do
+        if [ -f $(params.UID)/$(params.terminate) ]; then
+          echo "Terminating load; ${REQUESTS} requests sent; ${ERRORS} had errors."
+          break
+        fi
+        sleep $(params.INTERVAL)
+        OUT=
+        if [ -z ${HOST} ]; then
+          OUT=$(curl -o /dev/null -s -w "%{http_code}\n" $(params.URL))
+        else
+          OUT=$(curl -H "Host: ${HOST}" -o /dev/null -s -w "%{http_code}\n" $(params.URL))
+        fi
+        if [ "${OUT}" != "200" ]; then ((ERRORS++)); echo "Not OK: ${OUT}"; fi
+        ((REQUESTS++))
+      done
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: stop-load-task
+spec:
+  description: |
+    Trigger the termination of experiment load.
+  params:
+  - name: UID
+    default: "uid"
+    description: |
+      Unique identifier used to assocaite load with an experiment.
+      Suitable values might be the experiment name of the task/pipeline run name/uid.
+  - name: terminate
+    default: ".terminate"
+    description: Name of file that, if present, triggers termination of load generation.
+  workspaces:
+  - name: scratch
+  steps:
+  - name: wait
+    image: alpine
+    workingDir: $(workspaces.scratch.path)
+    script: |
+      #!/usr/bin/env sh
+
+      # To avoid conflicts, use a run specific subdirectory
+      mkdir -p $(params.UID)
+      touch $(params.UID)/$(params.terminate)

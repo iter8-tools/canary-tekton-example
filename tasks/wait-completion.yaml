@@ -3,43 +3,49 @@ kind: Task
 metadata:
   name: wait-completion-task
 spec:
-  inputs:
-    resources:
-      - name: git-source
-        type: git
-    params:
-      - name: experiment-template
-        description: yaml template for experiment
-        default: template.yaml
-      - name: experiment-id
-        description: unique identifier for experiment such as a build number
-        default: id
-      - name: target-namespace
-        description: namespace in which experiment is running
-        default: default
+  description: |
+    Wait until EXPERIMENT is completed;
+    that is, condition ExperimentCompleted is true.
+  params:
+  - name: EXPERIMENT
+    default: "experiment"
+    description: Name of iter8 experiment
+  - name: NAMESPACE
+    default: default
+    description: Namespace in which the iter8 experiment is defined.
+  - name: TIMEOUT
+    default: "1h"
+    description: Amount of time to wait for experiment to complete.
   steps:
-    - name: wait
-      image: kalantar/yq-kubectl
-      command: [ '/bin/bash' ]
-      args:
-        - '-c'
-        - |
-          # DURATION
-          # SLEEP_TIME
-          EXPERIMENT_TEMPLATE_FILE=/workspace/git-source/$(inputs.params.experiment-template)
-          EXPERIMENT_ID=$(inputs.params.experiment-id)
-          EXPERIMENT_NAME=$(yq read ${EXPERIMENT_TEMPLATE_FILE} metadata.name)-${EXPERIMENT_ID}
+  - name: wait
+    image: kalantar/yq-kubectl
+    script: |
+      #!/usr/bin/env sh
+      set -x
 
-          CLUSTER_NAMESPACE=$(inputs.params.target-namespace)
-          FORCE_TERMINATION=
-          IDS_STAGE_NAME="wait-experiment-completion"
-          STATUS_FILE="/status/done-${EXPERIMENT_ID}"
-          if [ -f ${STATUS_FILE} ]; then rm -rf ${STATUS_FILE}; fi
-          source <(curl -sSL "https://raw.githubusercontent.com/kalantar/iter8-tekton/master/bin/wait_complete.sh")
-      volumeMounts:
-        - name: status
-          mountPath: /status
-  volumes:
-    - name: status
-      persistentVolumeClaim:
-        claimName: experiment-stop-claim-$(inputs.params.target-namespace)
+      kubectl --namespace $(params.NAMESPACE) wait \
+        --for=condition=ExperimentCompleted \
+        experiments.iter8.tools $(params.EXPERIMENT) \
+        --timeout=$(params.TIMEOUT)
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: cleanup-task
+spec:
+  workspaces:
+  - name: workspace
+  params:
+  - name: UID
+    default: "uid"
+    description: |
+      Unique identifier used to assocaite load with an experiment.
+      Suitable values might be the experiment name of the task/pipeline run name/uid.
+  steps:
+  - name: clean-workspace
+    image: alpine
+    script: |
+      #!/usr/bin/env sh
+      set -x
+
+      rm -rf $(workspaces.workspace.path)/$(params.UID)
