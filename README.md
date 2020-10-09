@@ -11,17 +11,35 @@ This assumes a basic understanding of [iter8](https://iter8.tools) and [Tekton](
 
 **Istio**: <https://istio.io/docs/setup/>
 
-      istioctl manifest apply --set profile=demo
+```bash
+istioctl manifest apply \
+    --set profile=demo \
+    --set values.kiali.enabled=false \
+    --set values.grafana.enabled=false
+```
 
-**iter8**: <https://github.com/iter8-tools/docs/blob/master/doc_files/iter8_install.md>
+Or, for Istio 1.7 or greater:
 
-      kubectl apply \
-      -f https://raw.githubusercontent.com/iter8-tools/iter8-analytics/master/install/kubernetes/iter8-analytics.yaml \
-      -f https://raw.githubusercontent.com/iter8-tools/iter8-controller/master/install/iter8-controller.yaml
+```bash
+istioctl manifest install \
+    --set profile=demo \
+    --set values.kiali.enabled=false \
+    --set values.grafana.enabled=false \
+    --set values.prometheus.enabled=true
+```
+
+**iter8**: <https://iter8.tools/installation/kubernetes/>
+
+```bash
+curl -L -s https://raw.githubusercontent.com/iter8-tools/iter8/v1.0.0-rc3/install/install.sh \
+| /bin/bash -
+```
 
 **Tekton**: <https://github.com/tektoncd/pipeline/blob/master/docs/install.md>
 
-      kubectl apply --filename https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
+```bash
+kubectl apply --filename https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
+```
 
 <!--
 If using webhooks, the following additional items are needed:
