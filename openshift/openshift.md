@@ -104,7 +104,7 @@ spec:
 EOF
 ```
 
-### Triggered by GitHub Push Events
+### Triggering from GitHub Push Events
 
 #### Add Trigger Definition
 
@@ -198,7 +198,7 @@ Then select `Add webhook` to create the webhook.
 
 Make a change and commit the change to the master branch. The pipeline should be triggered and execute.
 
-## References
+## More Information
 
 [Pipelines](https://docs.openshift.com/container-platform/4.5/pipelines/creating-applications-with-cicd-pipelines.html).
 

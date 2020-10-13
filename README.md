@@ -1,6 +1,6 @@
 # Tekton Pipeline for Canary Rollout with iter8
 
-This project documents a sample Tekton `Pipeline` that builds and canary rollout of new versions of an application using **iter8**
+This project documents a sample Tekton `Pipeline` that builds and canary rollout of new versions of an application using **iter8**.
 This is a superset of what is described in [blog]().
 
 This assumes a basic understanding of [iter8](https://iter8.tools) and [Tekton](https://github.com/tektoncd/pipeline/tree/master/docs).
