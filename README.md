@@ -90,6 +90,13 @@ The sample pipeline builds code from a GitHub repository and deploys it using a 
 If it satisfies the canary criteria, the new build will be promoted.
 To modify and build new versions, fork the sample project: <https://github.com/iter8-tools/bookinfoapp-reviews>.
 
+For reference, define some environment variables that refer to your fork and the docker repo you will use:
+
+```bash
+export GITHUB_REPO=<github repo>
+export DOCKER_REPO=<dockerhub repo>
+```
+
 ### Define Secrets for Authentication
 
 The build task reads the source code from a GitHub repository, builds a Docker image and pushes it to a Docker registry. At execution time, the pods need permission to read the GitHub repository and write to Docker registry. This can be accomplished by defining secrets and associating them with the service account that is used to run the pipeline.
@@ -211,6 +218,8 @@ Finally, to execute the pipeline, we must create a `PipelineRun` resource. The `
 A `PipelineRun` can be created manually as follows:
 
 ```bash
+export HOST='bookinfo.example.com'
+
 kubectl apply --filename - <<EOF
 apiVersion: tekton.dev/v1beta1
 kind: PipelineRun
@@ -228,16 +237,16 @@ spec:
       claimName: experiment-storage
   params:
   - name: application-source
-    value: https://github.com/kalantar/reviews
+    value: ${GITHUB_REPO}
   - name: application-namespace
     value: ${APPLICATION_NAMESPACE}
   - name: application-image
-    value: kalantar/reviews
+    value: ${DOCKER_REPO}
   - name: application-query
     value: productpage
 
   - name: HOST
-    value: "bookinfo.example.com"
+    value: ${HOST}
 
   - name: experiment-template
     value: iter8/experiment.yaml

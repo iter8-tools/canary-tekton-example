@@ -1,0 +1,11 @@
+apiVersion: triggers.tekton.dev/v1alpha1
+kind: EventListener
+metadata:
+  name: reviews
+spec:
+  serviceAccountName: default
+  triggers:
+  - bindings:
+    - name: reviews-binding
+    template:
+      name: reviews-template
