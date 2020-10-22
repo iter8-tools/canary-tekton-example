@@ -40,9 +40,21 @@ spec:
     description: Name of file that, if present, triggers termination of load generation.
 
   tasks:
+  - name: initialize-request
+    taskRef:
+      name: queue-request-task
+    workspaces:
+    - name: scratch
+      workspace: experiment-dir
+    params:
+    - name: UID
+      value: $(context.pipelineRun.uid)
+      
   - name: clone-source
     taskRef:
       name: git-clone
+    runAfter:
+    - initialize-request
     workspaces:
     - name: output
       workspace: source
@@ -161,6 +173,8 @@ spec:
   - name: identify-endpoint
     taskRef:
       name: identify-endpoint-task
+    runAfter:
+    - initialize-request
     params:
     - name: application-query
       value: $(params.application-query)
@@ -228,3 +242,9 @@ spec:
     params:
     - name: UID
       value: $(context.pipelineRun.uid)
+  - name: complete-request
+    taskRef:
+      name: dequeue-request-task
+    workspaces:
+    - name: scratch
+      workspace: experiment-dir

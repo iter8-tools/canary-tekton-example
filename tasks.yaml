@@ -401,7 +401,7 @@ spec:
     command: [ "cat" ]
     args: [ "deploy-$(params.UID).yaml" ]
 ---
-apiVersion: tekton.dev/v1alpha1
+apiVersion: tekton.dev/v1beta1
 kind: Task
 metadata:
   name: wait-completion-task
@@ -576,7 +576,7 @@ spec:
         ((REQUESTS++))
       done
 ---
-apiVersion: tekton.dev/v1alpha1
+apiVersion: tekton.dev/v1beta1
 kind: Task
 metadata:
   name: stop-load-task
@@ -604,3 +604,77 @@ spec:
       # To avoid conflicts, use a run specific subdirectory
       mkdir -p $(params.UID)
       touch $(params.UID)/$(params.terminate)
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: queue-request-task
+spec:
+  description: |
+    Place self at the end of a queue and wait until we are at the top.
+  params:
+  - name: UID
+    default: "uid"
+    description: |
+      Unique identifier used to assocaite load with an experiment.
+      Suitable values might be the experiment name of the task/pipeline run name/uid.
+  - name: lock-dir
+    default: ".lock"
+    description: Name of directory to use to acquire mutex.
+  - name: queue
+    default: ".queue"
+    description: Name of the file containing execution queue.
+  - name: wait-time
+    default: "20"
+    description: Sleep time between attempts to aquire the lock.
+  workspaces:
+  - name: scratch
+  steps:
+  - name: queue
+    image: alpine
+    workingDir: $(workspaces.scratch.path)
+    script: |
+      #!/usr/bin/env sh
+
+      while [ "$(params.UID)" != "$(tail -n 1 $(params.queue))" ]; do
+        if mkdir "$(params.lock-dir)"; then
+          echo "queuing $(params.UID)"
+          echo $(params.UID) >> $(params.queue)
+          rm -rf "$(params.lock-dir)"
+        else
+          sleep $(params.wait-time)
+        fi
+      done
+  - name: wait-head
+    image: alpine
+    workingDir: $(workspaces.scratch.path)
+    script: |
+      #!/usr/bin/env sh
+
+      while [ "$(params.UID)" != "$(head -n 1 $(params.queue))" ]; do
+        sleep $(params.wait-time)
+      done
+      echo "$(params.UID) proceeding"
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: dequeue-request-task
+spec:
+  description: |
+    Remove entry from top of queue.
+  params:
+  - name: queue
+    default: ".queue"
+    description: Name of the file containing execution queue.
+  workspaces:
+  - name: scratch
+  steps:
+  - name: dequeue
+    image: alpine
+    workingDir: $(workspaces.scratch.path)
+    script: |
+      #!/usr/bin/env sh
+
+      tail -n +2 $(params.queue) > /tmp/$$; mv /tmp/$$ $(params.queue)
+      

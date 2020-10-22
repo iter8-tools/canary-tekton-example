@@ -1,0 +1,43 @@
+apiVersion: triggers.tekton.dev/v1alpha1
+kind: TriggerTemplate
+metadata:
+  name: reviews-template
+spec:
+  params:
+  - name: git-repo-url
+    description: The git repository url
+  - name: git-revision
+    description: The git revision
+    default: master
+  - name: git-repo-name
+    description: The name of the deployment to be created / patched
+
+  resourcetemplates:
+  - apiVersion: tekton.dev/v1beta1
+    kind: PipelineRun
+    metadata:
+      name: canary-rollout-$(params.git-repo-name)-$(uid)
+    spec:
+      pipelineRef:
+        name: canary-rollout-iter8
+      serviceAccountName: default
+      workspaces:
+      - name: source
+        persistentVolumeClaim:
+          claimName: source-storage
+      - name: experiment-dir
+        persistentVolumeClaim:
+          claimName: experiment-storage
+      params:
+      - name: application-source
+        value: https://github.com/kalantar/reviews
+      - name: application-namespace
+        value: bookinfo-pipeline
+      - name: application-image
+        value: kalantar/reviews
+      - name: application-query
+        value: productpage
+      - name: HOST
+        value: "istio-ingressgateway-istio-system.kalantar-rh1-76c942296186c1e5a6724002dc1a424f-0000.us-south.containers.appdomain.cloud"
+      - name: experiment-template
+        value: iter8/experiment.yaml

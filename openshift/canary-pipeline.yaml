@@ -44,9 +44,21 @@ spec:
     taskRef:
       name: generate-uid-task
 
+  - name: initialize-request
+    taskRef:
+      name: queue-request-task
+    workspaces:
+    - name: scratch
+      workspace: experiment-dir
+    params:
+    - name: UID
+      value: $(tasks.generate-uid.results.uid)
+
   - name: clone-source
     taskRef:
       name: git-clone
+    runAfter:
+    - initialize-request
     workspaces:
     - name: output
       workspace: source
@@ -165,6 +177,8 @@ spec:
   - name: identify-endpoint
     taskRef:
       name: identify-endpoint-task
+    runAfter:
+    - initialize-request
     params:
     - name: application-query
       value: $(params.application-query)
@@ -219,6 +233,7 @@ spec:
       name: cleanup-task
     runAfter:
     - stop-load-generation
+    - generate-load
     workspaces:
     - name: workspace
       workspace: experiment-dir
@@ -236,3 +251,12 @@ spec:
     params:
     - name: UID
       value: $(tasks.generate-uid.results.uid)
+  - name: complete-request
+    taskRef:
+      name: dequeue-request-task
+    runAfter:
+    - stop-load-generation
+    - generate-load
+    workspaces:
+    - name: scratch
+      workspace: experiment-dir
